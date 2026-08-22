@@ -315,6 +315,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
     if (code === "ssh_interactive_auth_required") return t("configModal.ssh.interactiveBrowseUnavailable");
     if (code === "ssh_remote_path_invalid") return t("configModal.ssh.pathInvalid");
     if (code === "ssh_remote_path_parent_forbidden") return t("configModal.ssh.pathParentForbidden");
+    if (code === "cannot_delete_root") return t("configModal.ssh.pickerDeleteRoot");
     return code;
   }, [t]);
 
@@ -978,6 +979,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
               onDelete={deleteRemoteDirectory}
               pathLabel={t(remotePickerTarget === "projectPath" ? "configModal.ssh.remotePath" : "configModal.ssh.cliConfigRoot")}
               emptyLabel={t("configModal.ssh.pickerEmpty")}
+              describeError={describeRemotePathError}
             />
           </div>
           <DialogFooter className="border-t border-border px-4 py-3">

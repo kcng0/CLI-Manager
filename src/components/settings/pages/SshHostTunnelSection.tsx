@@ -9,6 +9,12 @@ import {
   type SshForwardDraft,
 } from "../../../stores/sshTunnelStore";
 import { Select } from "../../ui/select";
+import { useAppConfirm } from "../../ui/useAppConfirm";
+
+function isLanBind(host: string): boolean {
+  const value = host.trim().toLowerCase();
+  return value === "0.0.0.0" || value === "::" || value === "[::]";
+}
 
 const TUNNEL_ERROR_LABELS: Record<string, TranslationKey> = {
   ssh_forward_port_invalid: "settings.sshHosts.error.forwardPortInvalid",
@@ -52,6 +58,7 @@ export function SshHostTunnelSection({ hostId }: { hostId: string | null }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const { confirm, confirmDialog } = useAppConfirm();
 
   useEffect(() => {
     if (hostId) void fetchForwards();
@@ -86,6 +93,15 @@ export function SshHostTunnelSection({ hostId }: { hostId: string | null }) {
   };
 
   const run = async (id: string, action: "start" | "stop" | "delete") => {
+    if (action === "delete") {
+      const forward = forwards.find((item) => item.id === id);
+      const confirmed = await confirm({
+        title: t("settings.sshHosts.tunnels.delete"),
+        message: t("settings.sshHosts.tunnels.deleteConfirm", { name: forward?.name || id }),
+        danger: true,
+      });
+      if (!confirmed) return;
+    }
     setBusyId(id);
     setError("");
     try {
@@ -102,6 +118,7 @@ export function SshHostTunnelSection({ hostId }: { hostId: string | null }) {
 
   return (
     <div className="space-y-3">
+      {confirmDialog}
       {error && <div className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div>}
       {forwards.length === 0 && <div className="rounded-xl border border-border bg-surface-low px-3 py-2 text-xs text-text-muted">{t("settings.sshHosts.tunnels.empty")}</div>}
       {forwards.map((forward) => {
@@ -120,9 +137,9 @@ export function SshHostTunnelSection({ hostId }: { hostId: string | null }) {
           <div key={forward.id} className="rounded-xl border border-border bg-surface-lowest px-4 py-3">
             <div className="flex items-start justify-between gap-3">
               <button type="button" className="min-w-0 flex-1 text-left" onClick={() => { setEditingId(forward.id); setDraft(draftFromForward(forward)); setError(""); }}>
-                <div className="truncate text-sm font-bold text-text-primary">{forward.name || t(`settings.sshHosts.tunnels.mode.${forward.mode}`)}</div>
+                <div className="truncate text-sm font-bold text-text-primary">{forward.name || t(`settings.sshHosts.tunnels.mode.${forward.mode}` as const)}</div>
                 <div className="mt-1 truncate font-mono text-[11px] text-text-muted">{summary}</div>
-                <div className={`mt-1 text-[11px] font-bold ${tone}`}>{label}{status?.error ? ` · ${status.error}` : ""}</div>
+                <div className={`mt-1 text-[11px] font-bold ${tone}`}>{label}{status?.error ? ` · ${describeTunnelError(status.error, t)}` : ""}</div>
               </button>
               <div className="flex shrink-0 gap-1">
                 {state === "running" ? (
@@ -208,6 +225,9 @@ function TunnelDraftForm({
         <input type="checkbox" checked={draft.auto_start} onChange={(event) => onChange("auto_start", event.target.checked)} />
         {t("settings.sshHosts.tunnels.autoStart")}
       </label>
+      {isLanBind(draft.listen_address) && (
+        <div className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">{t("settings.sshHosts.tunnels.lanBindWarning")}</div>
+      )}
       <div className="flex justify-end gap-2">
         <button type="button" className="ui-button-secondary h-8 rounded-lg px-3 text-xs font-bold" onClick={onReset}>{t("common.cancel")}</button>
         <button type="button" className="ui-button-primary h-8 rounded-lg px-3 text-xs font-bold" disabled={saving} onClick={onSave}>

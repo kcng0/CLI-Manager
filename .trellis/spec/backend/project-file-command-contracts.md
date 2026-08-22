@@ -72,6 +72,7 @@ UserFileBytes { name: String, size_bytes: u64, data_base64: String }
 - `overwrite=false` must return `target_exists` when the destination exists.
 - `overwrite=true` may replace the target after Rust revalidates the destination stays inside root.
 - `file_read_user_file` / `file_write_user_file` accept an absolute user-chosen path for SSH upload/download. They reject symlinks, empty files, and files larger than 20 MiB, and must not be used as a project-root relative file API.
+- SSH Agent `fileReadBytes` / `fileWriteBytes` are chunked at 512 KiB (`offset` / `length`) so a 20 MiB manage transfer stays under the 1 MiB Agent frame cap. A single-frame write larger than 512 KiB must return `remote_file_chunk_too_large`.
 
 ### 4. Validation & Error Matrix
 

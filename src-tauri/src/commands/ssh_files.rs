@@ -1,4 +1,4 @@
-use crate::daemon::client::DaemonBridge;
+use crate::daemon::client::{DaemonBridge, DaemonClient};
 use crate::ssh_launch::SshLaunchPlan;
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::{json, Value};
@@ -77,6 +77,121 @@ async fn request(
     })
     .await
     .map_err(|err| err.to_string())?
+}
+
+fn read_managed_file_bytes(
+    client: &DaemonClient,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    relative_path: String,
+) -> Result<Value, String> {
+    let mut offset = 0u64;
+    let mut collected = Vec::new();
+    let mut name = String::new();
+    let mut total_size = 0u64;
+    loop {
+        let response = client.ssh_agent_request(
+            consumer_id.clone(),
+            ssh_launch.clone(),
+            "fileReadBytes".to_string(),
+            json!({
+                "rootPath": root_path,
+                "relativePath": relative_path,
+                "offset": offset,
+                "length": ATTACHMENT_CHUNK_BYTES,
+            }),
+        )?;
+        if name.is_empty() {
+            name = response
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+        }
+        total_size = response
+            .get("sizeBytes")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "remote_file_read_failed".to_string())?;
+        if total_size > MAX_ATTACHMENT_BYTES as u64 {
+            return Err("remote_file_too_large".to_string());
+        }
+        let chunk = general_purpose::STANDARD
+            .decode(
+                response
+                    .get("dataBase64")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "remote_file_bytes_invalid".to_string())?,
+            )
+            .map_err(|_| "remote_file_bytes_invalid".to_string())?;
+        if collected.len().saturating_add(chunk.len()) as u64 > MAX_ATTACHMENT_BYTES as u64 {
+            return Err("remote_file_too_large".to_string());
+        }
+        collected.extend_from_slice(&chunk);
+        let eof = response.get("eof").and_then(Value::as_bool).unwrap_or(false);
+        offset = collected.len() as u64;
+        if eof || offset >= total_size {
+            break;
+        }
+        if chunk.is_empty() {
+            return Err("remote_file_read_failed".to_string());
+        }
+    }
+    Ok(json!({
+        "name": name,
+        "relativePath": relative_path,
+        "sizeBytes": collected.len() as u64,
+        "dataBase64": general_purpose::STANDARD.encode(collected),
+    }))
+}
+
+fn write_managed_file_bytes(
+    client: &DaemonClient,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    parent_path: String,
+    name: String,
+    data: Vec<u8>,
+    overwrite: bool,
+) -> Result<Value, String> {
+    if data.len() > MAX_ATTACHMENT_BYTES {
+        return Err("remote_file_too_large".to_string());
+    }
+    let mut last = Value::Null;
+    let mut offset = 0u64;
+    if data.is_empty() {
+        return client.ssh_agent_request(
+            consumer_id,
+            ssh_launch,
+            "fileWriteBytes".to_string(),
+            json!({
+                "rootPath": root_path,
+                "parentPath": parent_path,
+                "name": name,
+                "dataBase64": "",
+                "overwrite": overwrite,
+                "offset": 0,
+            }),
+        );
+    }
+    for chunk in data.chunks(ATTACHMENT_CHUNK_BYTES) {
+        last = client.ssh_agent_request(
+            consumer_id.clone(),
+            ssh_launch.clone(),
+            "fileWriteBytes".to_string(),
+            json!({
+                "rootPath": root_path,
+                "parentPath": parent_path,
+                "name": name,
+                "dataBase64": general_purpose::STANDARD.encode(chunk),
+                "overwrite": overwrite,
+                "offset": offset,
+            }),
+        )?;
+        offset += chunk.len() as u64;
+    }
+    Ok(last)
 }
 
 fn validate_attachment_name(file_name: &str) -> Result<(), String> {
@@ -521,6 +636,17 @@ pub async fn ssh_remote_file_move(
     .await
 }
 
+fn split_relative_file(path: &str) -> Result<(String, String), String> {
+    let normalized = path.trim().trim_start_matches('/');
+    if normalized.is_empty() {
+        return Err("remote_file_path_invalid".to_string());
+    }
+    match normalized.rsplit_once('/') {
+        Some((parent, name)) => Ok((parent.to_string(), name.to_string())),
+        None => Ok((String::new(), normalized.to_string())),
+    }
+}
+
 #[tauri::command]
 pub async fn ssh_remote_file_write(
     daemon_bridge: tauri::State<'_, DaemonBridge>,
@@ -530,18 +656,39 @@ pub async fn ssh_remote_file_write(
     relative_path: String,
     content: String,
 ) -> Result<Value, String> {
-    request(
-        daemon_bridge,
-        consumer_id,
-        ssh_launch,
-        "fileWrite",
-        json!({
-            "rootPath": root_path,
-            "relativePath": relative_path,
-            "content": content
-        }),
-    )
+    if content.len() <= ATTACHMENT_CHUNK_BYTES {
+        return request(
+            daemon_bridge,
+            consumer_id,
+            ssh_launch,
+            "fileWrite",
+            json!({
+                "rootPath": root_path,
+                "relativePath": relative_path,
+                "content": content
+            }),
+        )
+        .await;
+    }
+    let (parent_path, name) = split_relative_file(&relative_path)?;
+    validate_plan(&ssh_launch)?;
+    let client = daemon_bridge
+        .get()
+        .ok_or_else(|| "daemon_unavailable".to_string())?;
+    tokio::task::spawn_blocking(move || {
+        write_managed_file_bytes(
+            client.as_ref(),
+            consumer_id,
+            ssh_launch,
+            root_path,
+            parent_path,
+            name,
+            content.into_bytes(),
+            true,
+        )
+    })
     .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
@@ -570,14 +717,21 @@ pub async fn ssh_remote_file_read_bytes(
     root_path: String,
     relative_path: String,
 ) -> Result<Value, String> {
-    request(
-        daemon_bridge,
-        consumer_id,
-        ssh_launch,
-        "fileReadBytes",
-        json!({ "rootPath": root_path, "relativePath": relative_path }),
-    )
+    validate_plan(&ssh_launch)?;
+    let client = daemon_bridge
+        .get()
+        .ok_or_else(|| "daemon_unavailable".to_string())?;
+    tokio::task::spawn_blocking(move || {
+        read_managed_file_bytes(
+            client.as_ref(),
+            consumer_id,
+            ssh_launch,
+            root_path,
+            relative_path,
+        )
+    })
     .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
@@ -591,20 +745,34 @@ pub async fn ssh_remote_file_write_bytes(
     data_base64: String,
     overwrite: bool,
 ) -> Result<Value, String> {
-    request(
-        daemon_bridge,
-        consumer_id,
-        ssh_launch,
-        "fileWriteBytes",
-        json!({
-            "rootPath": root_path,
-            "parentPath": parent_path,
-            "name": name,
-            "dataBase64": data_base64,
-            "overwrite": overwrite
-        }),
-    )
+    validate_plan(&ssh_launch)?;
+    let data = if data_base64.is_empty() {
+        Vec::new()
+    } else {
+        general_purpose::STANDARD
+            .decode(data_base64.as_bytes())
+            .map_err(|_| "remote_file_bytes_invalid".to_string())?
+    };
+    if data.len() > MAX_ATTACHMENT_BYTES {
+        return Err("remote_file_too_large".to_string());
+    }
+    let client = daemon_bridge
+        .get()
+        .ok_or_else(|| "daemon_unavailable".to_string())?;
+    tokio::task::spawn_blocking(move || {
+        write_managed_file_bytes(
+            client.as_ref(),
+            consumer_id,
+            ssh_launch,
+            root_path,
+            parent_path,
+            name,
+            data,
+            overwrite,
+        )
+    })
     .await
+    .map_err(|err| err.to_string())?
 }
 
 #[cfg(test)]

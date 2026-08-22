@@ -29,6 +29,9 @@ test("file explorer exposes a path bar and extra file actions", () => {
   assert.match(sidebar, /files\.menu\.properties/);
   assert.match(sidebar, /files\.menu\.download/);
   assert.match(sidebar, /files\.menu\.upload/);
+  assert.match(sidebar, /selectTreePath\(displayEntry\.path\)/);
+  assert.match(sidebar, /remoteWritable !== true/);
+  assert.match(sidebar, /files\.error\.agentUpgradeRequired/);
 });
 
 test("absolute file paths use the local root or SSH remote root", () => {

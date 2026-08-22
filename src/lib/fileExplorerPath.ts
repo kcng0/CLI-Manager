@@ -19,9 +19,19 @@ export function explorerPathSegments(relativePath: string): string[] {
   return normalized ? normalized.split("/").filter(Boolean) : [];
 }
 
+function posixRemoteRoot(remotePath?: string): string {
+  const raw = (remotePath ?? "").trim();
+  if (!raw || raw === "/") return "/";
+  return raw.replace(/\/+$/g, "") || "/";
+}
+
 function stripRootPrefix(input: string, root: string, caseInsensitive: boolean): string | null {
   const normalizedInput = input.replace(/\\/g, "/").replace(/\/+$/g, "");
-  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/g, "");
+  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/g, "") || (root === "/" ? "/" : "");
+  if (normalizedRoot === "/") {
+    if (!normalizedInput || normalizedInput === "/") return "";
+    return normalizedInput.startsWith("/") ? normalizedInput.slice(1) : null;
+  }
   if (!normalizedRoot) return null;
   if (caseInsensitive) {
     if (normalizedInput.toLowerCase() === normalizedRoot.toLowerCase()) return "";
@@ -52,8 +62,9 @@ export function parseWslUncToLinuxPath(path: string): string | null {
 export function formatExplorerAddress(project: ExplorerPathProject, relativePath: string): string {
   const relative = normalizeExplorerRelativePath(relativePath);
   if (project.environment_type === "ssh") {
-    const root = (project.remote_path ?? "").replace(/\/+$/g, "") || "/";
-    return relative ? `${root}/${relative}` : root;
+    const root = posixRemoteRoot(project.remote_path);
+    if (!relative) return root;
+    return root === "/" ? `/${relative}` : `${root}/${relative}`;
   }
   const root = project.path.replace(/[\\/]+$/g, "");
   if (!relative) return root;
@@ -72,7 +83,7 @@ export function parseExplorerPathInput(
   const asForward = trimmed.replace(/\\/g, "/");
 
   if (ssh) {
-    const remoteRoot = (project.remote_path ?? "").replace(/\/+$/g, "") || "/";
+    const remoteRoot = posixRemoteRoot(project.remote_path);
     const underRemote = stripRootPrefix(asForward, remoteRoot, false);
     if (underRemote !== null) return validateRelativeSegments(underRemote);
     if (asForward.startsWith("/")) return null;

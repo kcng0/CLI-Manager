@@ -260,15 +260,32 @@ pub async fn ssh_db_import_config_hosts(
 }
 
 #[tauri::command]
-pub async fn ssh_db_delete_host(id: String) -> Result<(), String> {
+pub async fn ssh_db_delete_host(
+    tunnels: tauri::State<'_, crate::commands::ssh_tunnels::SshTunnelManager>,
+    id: String,
+) -> Result<(), String> {
     let id = id.trim();
     if id.is_empty() {
         return Err("ssh_host_not_found".to_string());
+    }
+    let forward_ids = list_host_forward_ids(id).await.unwrap_or_default();
+    tunnels.stop_for_host(id);
+    for forward_id in forward_ids {
+        let _ = tunnels.stop(&forward_id);
     }
     let mut conn = open_database().await?;
     begin_immediate(&mut conn).await?;
     let result = delete_host_with_conn(&mut conn, id).await;
     finish_transaction(&mut conn, result).await
+}
+
+async fn list_host_forward_ids(host_id: &str) -> Result<Vec<String>, String> {
+    let mut conn = open_database().await?;
+    sqlx::query_scalar::<_, String>("SELECT id FROM ssh_port_forwards WHERE host_id = ?1")
+        .bind(host_id)
+        .fetch_all(&mut conn)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn delete_host_with_conn(conn: &mut SqliteConnection, id: &str) -> Result<(), String> {

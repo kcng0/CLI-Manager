@@ -73,7 +73,8 @@ type RenameAction = Extract<InputAction, { kind: "rename" }>;
 type ConfirmAction =
   | { kind: "delete"; path: string; name: string }
   | { kind: "overwrite-create"; action: InputAction; value: string }
-  | { kind: "overwrite-paste"; targetParentPath: string };
+  | { kind: "overwrite-paste"; targetParentPath: string }
+  | { kind: "overwrite-upload"; parentPath: string; localPath: string };
 
 type FileDisplayStatus =
   | { kind: "editing"; label: string; color: string; symbol: string }
@@ -215,15 +216,31 @@ async function downloadExplorerEntry(path: string, name: string, t: Translate) {
   }
 }
 
-async function uploadExplorerFiles(parentPath: string, t: Translate) {
+async function uploadLocalFile(parentPath: string, localPath: string, overwrite: boolean, t: Translate) {
+  await useFileExplorerStore.getState().uploadInto(parentPath, localPath, overwrite);
+  toast.success(t("files.toast.uploaded"));
+}
+
+async function uploadExplorerFiles(
+  parentPath: string,
+  t: Translate,
+  onExists?: (localPath: string) => void,
+) {
   const selected = await open({ multiple: true, directory: false });
   const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
   if (paths.length === 0) return;
   try {
     for (const localPath of paths) {
-      await useFileExplorerStore.getState().uploadInto(parentPath, localPath, false);
+      try {
+        await uploadLocalFile(parentPath, localPath, false, t);
+      } catch (error) {
+        if (String(error).includes("target_exists") && onExists) {
+          onExists(localPath);
+          return;
+        }
+        throw error;
+      }
     }
-    toast.success(t("files.toast.uploaded"));
   } catch (error) {
     toast.error(t("files.toast.uploadFailed"), { description: describeExplorerError(error, t) });
   }
@@ -639,6 +656,7 @@ function FileNode({
               if (event.defaultPrevented) return;
               if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
+              useFileExplorerStore.getState().selectTreePath(displayEntry.path);
               if (isDir) toggleDirectory();
               else onOpenFile(displayEntry);
             }}
@@ -653,6 +671,7 @@ function FileNode({
             onPointerCancel={onFilePointerCancel}
             onClick={(event) => {
               if (event.currentTarget.dataset.pointerDragHandled === "true") return;
+              useFileExplorerStore.getState().selectTreePath(displayEntry.path);
               if (isDir) toggleDirectory();
               else onOpenFile(displayEntry);
             }}
@@ -742,13 +761,13 @@ function FileNode({
               <ContextMenuItem onSelect={() => void openExplorerPathInTerminal(project, isDir ? displayEntry.path : parentExplorerRelativePath(displayEntry.path), t)}>
                 <Terminal size={13} /> {t("files.menu.openInTerminal")}
               </ContextMenuItem>
-              {project.environment_type === "ssh" && !isDir && (
+              {project.environment_type === "ssh" && !isDir && !readOnly && (
                 <ContextMenuItem onSelect={() => void downloadExplorerEntry(displayEntry.path, displayEntry.name, t)}>
                   <Download size={13} /> {t("files.menu.download")}
                 </ContextMenuItem>
               )}
-              {project.environment_type === "ssh" && isDir && (
-                <ContextMenuItem onSelect={() => void uploadExplorerFiles(displayEntry.path, t)}>
+              {project.environment_type === "ssh" && isDir && !readOnly && (
+                <ContextMenuItem onSelect={() => void uploadExplorerFiles(displayEntry.path, t, (localPath) => onConfirm({ kind: "overwrite-upload", parentPath: displayEntry.path, localPath }))}>
                   <Upload size={13} /> {t("files.menu.upload")}
                 </ContextMenuItem>
               )}
@@ -920,7 +939,8 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const project = useFileExplorerStore((s) => s.project);
   const isSsh = project?.environment_type === "ssh";
   const localFs = !isSsh;
-  const readOnly = false;
+  const remoteWritable = useFileExplorerStore((s) => s.remoteWritable);
+  const readOnly = isSsh && remoteWritable !== true;
   const tree = useFileExplorerStore((s) => s.tree);
   const loading = useFileExplorerStore((s) => s.loading);
   const selectedTreePath = useFileExplorerStore((s) => s.selectedTreePath);
@@ -1242,9 +1262,9 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         setConfirmAction({ kind: "overwrite-create", action, value });
         return;
       }
-      throw err;
+      toast.error(t("files.toast.writeFailed"), { description: describeExplorerError(err, t) });
     }
-  }, [renameEntry]);
+  }, [renameEntry, t]);
 
   const performInputAction = useCallback(async (action: InputAction, rawValue: string, overwrite = false) => {
     const value = rawValue.trim();
@@ -1264,9 +1284,9 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         setConfirmAction({ kind: "overwrite-create", action, value });
         return;
       }
-      throw err;
+      toast.error(t("files.toast.writeFailed"), { description: describeExplorerError(err, t) });
     }
-  }, [createEntry, renameEntry]);
+  }, [createEntry, renameEntry, t]);
 
   const submitInput = useCallback(async (overwrite = false) => {
     if (!inputAction) return;
@@ -1281,9 +1301,9 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         setConfirmAction({ kind: "overwrite-paste", targetParentPath });
         return;
       }
-      throw err;
+      toast.error(t("files.toast.writeFailed"), { description: describeExplorerError(err, t) });
     }
-  }, [pasteInto]);
+  }, [pasteInto, t]);
 
   const getPasteTargetPath = useCallback((entry: ProjectFileEntry) => (
     entry.kind === "directory" ? entry.path : parentPath(entry.path)
@@ -1882,8 +1902,10 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         newFileLabel={t("files.menu.newFile")}
         newFolderLabel={t("files.menu.newFolder")}
         invalidPathLabel={t("files.path.invalid")}
+        writable={!readOnly}
       />
-      {isSsh && <div className="mt-1 text-[10px] text-text-muted">{t("files.remoteWritable")}</div>}
+      {isSsh && remoteWritable === true && <div className="mt-1 text-[10px] text-text-muted">{t("files.remoteWritable")}</div>}
+      {isSsh && remoteWritable === false && <div className="mt-1 text-[10px] text-danger">{t("files.error.agentUpgradeRequired")}</div>}
       {clipboard && <div className="mt-1 truncate text-[10px] text-text-muted">{clipboard.mode === "copy" ? t("files.clipboard.copy") : t("files.clipboard.move")}：{clipboard.name}</div>}
     </>
   );
@@ -1988,7 +2010,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
           <ContextMenuItem onSelect={() => void openExplorerPathInTerminal(project, "", t)}>
             <Terminal size={13} /> {t("files.menu.openInTerminal")}
           </ContextMenuItem>
-          {isSsh && <ContextMenuItem onSelect={() => void uploadExplorerFiles("", t)}>
+          {isSsh && !readOnly && <ContextMenuItem onSelect={() => void uploadExplorerFiles("", t, (localPath) => setConfirmAction({ kind: "overwrite-upload", parentPath: "", localPath }))}>
             <Upload size={13} /> {t("files.menu.upload")}
           </ContextMenuItem>}
           <PathCopyMenu project={project} relativePath="" kind="directory" />
@@ -2028,11 +2050,15 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         onConfirm={() => {
           const action = confirmAction;
           setConfirmAction(null);
-          if (action?.kind === "delete") void deleteEntry(action.path);
+          if (action?.kind === "delete") {
+            void deleteEntry(action.path).catch((error) => {
+              toast.error(t("files.toast.writeFailed"), { description: describeExplorerError(error, t) });
+            });
+          }
         }}
       />
       <ConfirmDialog
-        open={confirmAction?.kind === "overwrite-create" || confirmAction?.kind === "overwrite-paste"}
+        open={confirmAction?.kind === "overwrite-create" || confirmAction?.kind === "overwrite-paste" || confirmAction?.kind === "overwrite-upload"}
         title={t("files.confirm.targetExistsTitle")}
         message={t("files.confirm.overwriteMessage")}
         confirmText={t("files.confirm.overwrite")}
@@ -2045,7 +2071,14 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
             void performInputAction(action.action, action.value, true);
           }
           if (action?.kind === "overwrite-paste") {
-            void pasteInto(action.targetParentPath, true);
+            void pasteInto(action.targetParentPath, true).catch((error) => {
+              toast.error(t("files.toast.writeFailed"), { description: describeExplorerError(error, t) });
+            });
+          }
+          if (action?.kind === "overwrite-upload") {
+            void uploadLocalFile(action.parentPath, action.localPath, true, t).catch((error) => {
+              toast.error(t("files.toast.uploadFailed"), { description: describeExplorerError(error, t) });
+            });
           }
         }}
       />

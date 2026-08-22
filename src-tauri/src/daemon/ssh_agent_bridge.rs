@@ -770,6 +770,15 @@ fn required_capability(kind: &str) -> Option<&'static str> {
         | "fileAttachAnyChunk"
         | "fileAttachAnyFinish"
         | "fileAttachAnyAbort" => Some("fileAttachAny"),
+        "fileCreate"
+        | "fileRename"
+        | "fileDelete"
+        | "fileCopy"
+        | "fileMove"
+        | "fileWrite"
+        | "fileWriteBytes"
+        | "fileReadBytes"
+        | "fileStat" => Some("fileManage"),
         "agentCapabilitiesInspect" | "agentCapabilitiesProbe" => Some("agentCapabilitiesV1"),
         _ => None,
     }
@@ -1611,6 +1620,10 @@ mod tests {
                 "fileAttachAnyBegin",
                 "ssh_agent_capability_missing:fileAttachAny",
             ),
+            ("fileCreate", "ssh_agent_capability_missing:fileManage"),
+            ("fileWriteBytes", "ssh_agent_capability_missing:fileManage"),
+            ("fileReadBytes", "ssh_agent_capability_missing:fileManage"),
+            ("fileStat", "ssh_agent_capability_missing:fileManage"),
         ] {
             let (_reader_sender, reader_receiver) = mpsc::sync_channel(1);
             let (response_sender, response_receiver) = mpsc::sync_channel(1);

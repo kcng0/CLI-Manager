@@ -19,6 +19,7 @@ interface FileExplorerPathBarProps {
   newFileLabel: string;
   newFolderLabel: string;
   invalidPathLabel: string;
+  writable?: boolean;
 }
 
 export function FileExplorerPathBar({
@@ -37,6 +38,7 @@ export function FileExplorerPathBar({
   newFileLabel,
   newFolderLabel,
   invalidPathLabel,
+  writable = true,
 }: FileExplorerPathBarProps) {
   const [value, setValue] = useState(formatExplorerAddress(project, selectedPath));
   const [invalid, setInvalid] = useState(false);
@@ -82,24 +84,28 @@ export function FileExplorerPathBar({
         >
           <RefreshCw size={13} />
         </button>
-        <button
-          type="button"
-          className="ui-file-tooltip ui-icon-action"
-          data-tooltip={newFileLabel}
-          aria-label={newFileLabel}
-          onClick={onNewFile}
-        >
-          <File size={13} />
-        </button>
-        <button
-          type="button"
-          className="ui-file-tooltip ui-icon-action"
-          data-tooltip={newFolderLabel}
-          aria-label={newFolderLabel}
-          onClick={onNewFolder}
-        >
-          <FolderPlus size={13} />
-        </button>
+        {writable && (
+          <>
+            <button
+              type="button"
+              className="ui-file-tooltip ui-icon-action"
+              data-tooltip={newFileLabel}
+              aria-label={newFileLabel}
+              onClick={onNewFile}
+            >
+              <File size={13} />
+            </button>
+            <button
+              type="button"
+              className="ui-file-tooltip ui-icon-action"
+              data-tooltip={newFolderLabel}
+              aria-label={newFolderLabel}
+              onClick={onNewFolder}
+            >
+              <FolderPlus size={13} />
+            </button>
+          </>
+        )}
       </div>
       <div className="ui-file-search-input-shell flex items-center rounded-md border border-border bg-surface-container-lowest px-1.5">
         <input

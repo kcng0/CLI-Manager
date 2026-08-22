@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { getDb } from "../lib/db";
+import { translateCurrent } from "../lib/i18n";
 import { buildSshConnectionSpec } from "../lib/ssh";
 import type { SshPortForward, SshPortForwardMode, SshTunnelStatus } from "../lib/types";
 import { useSshHostStore } from "./sshHostStore";
@@ -49,9 +51,13 @@ function toForwardSpec(forward: SshPortForward) {
   };
 }
 
+function isValidPort(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= 65535;
+}
+
 function validateDraft(draft: SshForwardDraft): void {
-  if (draft.listen_port < 1 || draft.listen_port > 65535) throw new Error("ssh_forward_port_invalid");
-  if (draft.mode !== "dynamic" && (draft.target_port < 1 || draft.target_port > 65535)) {
+  if (!isValidPort(draft.listen_port)) throw new Error("ssh_forward_port_invalid");
+  if (draft.mode !== "dynamic" && !isValidPort(draft.target_port)) {
     throw new Error("ssh_forward_port_invalid");
   }
   if (!draft.listen_address.trim()) throw new Error("ssh_forward_host_invalid");
@@ -137,6 +143,10 @@ export const useSshTunnelStore = create<SshTunnelStore>((set, get) => ({
       );
     }
     await get().fetchForwards();
+    if (existing && get().statuses[forward.id]?.state === "running") {
+      await get().stopForward(forward.id);
+      await get().startForward(forward.id);
+    }
     return forward;
   },
 
@@ -154,6 +164,7 @@ export const useSshTunnelStore = create<SshTunnelStore>((set, get) => ({
     const host = hosts.find((item) => item.id === forward.host_id);
     if (!host) throw new Error("ssh_host_not_found");
     const status = await invoke<SshTunnelStatus>("ssh_tunnel_start", {
+      hostId: forward.host_id,
       forwardId: forward.id,
       spec: buildSshConnectionSpec(host, hosts),
       forward: toForwardSpec(forward),
@@ -172,12 +183,16 @@ export const useSshTunnelStore = create<SshTunnelStore>((set, get) => ({
     if (hosts.length === 0) {
       await useSshHostStore.getState().fetchHosts();
     }
+    let autoStartFailed = false;
     for (const forward of get().forwards.filter((item) => item.auto_start === 1)) {
       try {
         await get().startForward(forward.id);
       } catch {
-        // Keep other auto-start tunnels going; status refresh shows the failure.
+        autoStartFailed = true;
       }
+    }
+    if (autoStartFailed) {
+      toast.error(translateCurrent("settings.sshHosts.error.tunnelAutoStartFailed"));
     }
     await get().refreshStatuses();
   },

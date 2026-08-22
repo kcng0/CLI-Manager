@@ -8,8 +8,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::file_manage::{
-    FileCreateRequest, FileDeleteRequest, FileRenameRequest, FileStatRequest, FileTransferRequest,
-    FileWriteBytesRequest, FileWriteTextRequest,
+    FileCreateRequest, FileDeleteRequest, FileReadBytesRequest, FileRenameRequest,
+    FileStatRequest, FileTransferRequest, FileWriteBytesRequest, FileWriteTextRequest,
 };
 use crate::files::{
     FileAttachAbortRequest, FileAttachBeginRequest, FileAttachChunkRequest,
@@ -710,7 +710,7 @@ pub fn run_bridge(
                         ),
                     }
                 }
-                "fileReadBytes" => match serde_json::from_value::<FileStatRequest>(frame.payload) {
+                "fileReadBytes" => match serde_json::from_value::<FileReadBytesRequest>(frame.payload) {
                     Ok(request) => match crate::file_manage::read_bytes(request) {
                         Ok(payload) => response(request_id, "response", payload),
                         Err(code) => response(request_id, "error", json!({ "code": code })),

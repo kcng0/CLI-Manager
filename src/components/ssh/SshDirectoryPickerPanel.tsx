@@ -17,6 +17,7 @@ interface SshDirectoryPickerPanelProps {
   onDelete: (path: string) => Promise<void>;
   pathLabel: string;
   emptyLabel: string;
+  describeError?: (error: unknown) => string;
 }
 
 function parentDirectory(path: string): string {
@@ -35,12 +36,16 @@ export function SshDirectoryPickerPanel({
   onDelete,
   pathLabel,
   emptyLabel,
+  describeError,
 }: SshDirectoryPickerPanelProps) {
   const { t } = useI18n();
   const [creating, setCreating] = useState(false);
   const [folderName, setFolderName] = useState("");
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState("");
+  const [pendingDelete, setPendingDelete] = useState(false);
+
+  const formatError = (nextError: unknown) => describeError?.(nextError) ?? String(nextError);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -48,7 +53,7 @@ export function SshDirectoryPickerPanel({
     try {
       await action();
     } catch (nextError) {
-      setLocalError(String(nextError));
+      setLocalError(formatError(nextError));
     } finally {
       setBusy(false);
     }
@@ -102,9 +107,7 @@ export function SshDirectoryPickerPanel({
               setLocalError(t("configModal.ssh.pickerDeleteRoot"));
               return;
             }
-            void run(async () => {
-              await onDelete(path);
-            });
+            setPendingDelete(true);
           }}
           title={t("configModal.ssh.pickerDeleteFolder")}
           aria-label={t("configModal.ssh.pickerDeleteFolder")}
@@ -125,6 +128,26 @@ export function SshDirectoryPickerPanel({
           {t("common.refresh")}
         </Button>
       </div>
+      {pendingDelete && (
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+          <span>{t("configModal.ssh.pickerDeleteConfirm")}</span>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" disabled={busy} onClick={() => setPendingDelete(false)}>{t("common.cancel")}</Button>
+            <Button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setPendingDelete(false);
+                void run(async () => {
+                  await onDelete(path);
+                });
+              }}
+            >
+              {t("common.delete")}
+            </Button>
+          </div>
+        </div>
+      )}
       {creating && (
         <div className="flex gap-2">
           <Input

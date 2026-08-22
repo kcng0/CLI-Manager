@@ -2,11 +2,13 @@ use crate::files::{relative_path, resolve_relative, resolve_root, RemoteFileEntr
 use base64::{engine::general_purpose, Engine as _};
 use serde::Deserialize;
 use std::fs;
-use std::io::ErrorKind;
+use std::fs::OpenOptions;
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 const MAX_MANAGE_BYTES: u64 = 20 * 1024 * 1024;
-const MAX_TEXT_WRITE_BYTES: usize = 1024 * 1024;
+const MAX_CHUNK_BYTES: usize = 512 * 1024;
+const MAX_TEXT_WRITE_BYTES: usize = 512 * 1024;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,6 +69,8 @@ pub struct FileWriteBytesRequest {
     pub data_base64: String,
     #[serde(default)]
     pub overwrite: bool,
+    #[serde(default)]
+    pub offset: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -74,6 +78,17 @@ pub struct FileWriteBytesRequest {
 pub struct FileStatRequest {
     pub root_path: String,
     pub relative_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileReadBytesRequest {
+    pub root_path: String,
+    pub relative_path: String,
+    #[serde(default)]
+    pub offset: u64,
+    #[serde(default)]
+    pub length: u64,
 }
 
 pub fn create(request: FileCreateRequest) -> Result<RemoteFileEntry, String> {
@@ -150,20 +165,46 @@ pub fn write_bytes(request: FileWriteBytesRequest) -> Result<RemoteFileEntry, St
     let data = general_purpose::STANDARD
         .decode(request.data_base64.as_bytes())
         .map_err(|_| "remote_file_bytes_invalid".to_string())?;
-    if data.is_empty() {
+    if data.len() > MAX_CHUNK_BYTES {
+        return Err("remote_file_chunk_too_large".to_string());
+    }
+    if data.is_empty() && request.offset != 0 {
         return Err("attachment_empty".to_string());
     }
-    if data.len() as u64 > MAX_MANAGE_BYTES {
+    let end = request
+        .offset
+        .checked_add(data.len() as u64)
+        .ok_or_else(|| "remote_file_too_large".to_string())?;
+    if end > MAX_MANAGE_BYTES {
         return Err("remote_file_too_large".to_string());
     }
     let root = resolve_root(&request.root_path)?;
     let target = resolve_new_child(&root, &request.parent_path, &request.name)?;
-    prepare_target(&target, request.overwrite)?;
-    fs::write(&target, data).map_err(|_| "remote_file_write_failed".to_string())?;
+    if request.offset == 0 {
+        prepare_target(&target, request.overwrite)?;
+        fs::write(&target, &data).map_err(|_| "remote_file_write_failed".to_string())?;
+        return stat_path(&root, &target);
+    }
+    let metadata =
+        fs::symlink_metadata(&target).map_err(|_| "remote_file_not_found".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("remote_file_path_confined".to_string());
+    }
+    if request.offset > metadata.len() {
+        return Err("remote_file_offset_invalid".to_string());
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .open(&target)
+        .map_err(|_| "remote_file_write_failed".to_string())?;
+    file.seek(SeekFrom::Start(request.offset))
+        .map_err(|_| "remote_file_write_failed".to_string())?;
+    file.write_all(&data)
+        .map_err(|_| "remote_file_write_failed".to_string())?;
     stat_path(&root, &target)
 }
 
-pub fn read_bytes(request: FileStatRequest) -> Result<serde_json::Value, String> {
+pub fn read_bytes(request: FileReadBytesRequest) -> Result<serde_json::Value, String> {
     let root = resolve_root(&request.root_path)?;
     let path = resolve_existing_plain(&root, &request.relative_path)?;
     let metadata = fs::symlink_metadata(&path).map_err(|_| "remote_file_not_found".to_string())?;
@@ -173,12 +214,34 @@ pub fn read_bytes(request: FileStatRequest) -> Result<serde_json::Value, String>
     if metadata.len() > MAX_MANAGE_BYTES {
         return Err("remote_file_too_large".to_string());
     }
-    let data = fs::read(&path).map_err(|_| "remote_file_read_failed".to_string())?;
+    if request.offset > metadata.len() {
+        return Err("remote_file_offset_invalid".to_string());
+    }
+    let length = if request.length == 0 {
+        MAX_CHUNK_BYTES as u64
+    } else {
+        request.length
+    };
+    if length > MAX_CHUNK_BYTES as u64 {
+        return Err("remote_file_chunk_too_large".to_string());
+    }
+    let remaining = metadata.len() - request.offset;
+    let to_read = remaining.min(length) as usize;
+    let mut data = vec![0u8; to_read];
+    if to_read > 0 {
+        let mut file = fs::File::open(&path).map_err(|_| "remote_file_read_failed".to_string())?;
+        file.seek(SeekFrom::Start(request.offset))
+            .map_err(|_| "remote_file_read_failed".to_string())?;
+        file.read_exact(&mut data)
+            .map_err(|_| "remote_file_read_failed".to_string())?;
+    }
     Ok(serde_json::json!({
         "name": path.file_name().and_then(|value| value.to_str()).unwrap_or_default(),
         "relativePath": relative_path(&root, &path)?,
-        "sizeBytes": data.len() as u64,
+        "sizeBytes": metadata.len(),
+        "offset": request.offset,
         "dataBase64": general_purpose::STANDARD.encode(data),
+        "eof": request.offset + to_read as u64 >= metadata.len(),
     }))
 }
 
@@ -374,8 +437,8 @@ fn stat_path(root: &Path, path: &Path) -> Result<RemoteFileEntry, String> {
 mod tests {
     use super::{
         copy, create, delete, move_entry, read_bytes, rename, write_bytes, write_text,
-        FileCreateRequest, FileDeleteRequest, FileRenameRequest, FileStatRequest,
-        FileTransferRequest, FileWriteBytesRequest, FileWriteTextRequest,
+        FileCreateRequest, FileDeleteRequest, FileReadBytesRequest, FileRenameRequest,
+        FileTransferRequest, FileWriteBytesRequest, FileWriteTextRequest, MAX_CHUNK_BYTES,
     };
     use base64::{engine::general_purpose, Engine as _};
     use std::fs;
@@ -465,6 +528,7 @@ mod tests {
             name: "data.bin".into(),
             data_base64: encoded,
             overwrite: false,
+            offset: 0,
         })
         .unwrap();
         assert_eq!(
@@ -474,17 +538,88 @@ mod tests {
                 name: "data.bin".into(),
                 data_base64: general_purpose::STANDARD.encode(b"other"),
                 overwrite: false,
+                offset: 0,
             })
             .unwrap_err(),
             "target_exists"
         );
-        let payload = read_bytes(FileStatRequest {
+        let payload = read_bytes(FileReadBytesRequest {
             root_path,
             relative_path: "data.bin".into(),
+            offset: 0,
+            length: 0,
         })
         .unwrap();
         assert_eq!(payload["sizeBytes"], 7);
+        assert_eq!(payload["eof"], true);
         assert_eq!(payload["dataBase64"], general_purpose::STANDARD.encode(b"payload"));
+    }
+
+    #[test]
+    fn bytes_round_trip_uses_512kib_chunks() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root_path(&root);
+        let first = vec![0xABu8; MAX_CHUNK_BYTES];
+        let second = vec![0xCDu8; 128 * 1024];
+        write_bytes(FileWriteBytesRequest {
+            root_path: root_path.clone(),
+            parent_path: String::new(),
+            name: "chunk.bin".into(),
+            data_base64: general_purpose::STANDARD.encode(&first),
+            overwrite: false,
+            offset: 0,
+        })
+        .unwrap();
+        write_bytes(FileWriteBytesRequest {
+            root_path: root_path.clone(),
+            parent_path: String::new(),
+            name: "chunk.bin".into(),
+            data_base64: general_purpose::STANDARD.encode(&second),
+            overwrite: false,
+            offset: first.len() as u64,
+        })
+        .unwrap();
+        assert_eq!(
+            write_bytes(FileWriteBytesRequest {
+                root_path: root_path.clone(),
+                parent_path: String::new(),
+                name: "chunk.bin".into(),
+                data_base64: general_purpose::STANDARD.encode(vec![0u8; MAX_CHUNK_BYTES + 1]),
+                overwrite: true,
+                offset: 0,
+            })
+            .unwrap_err(),
+            "remote_file_chunk_too_large"
+        );
+        let head = read_bytes(FileReadBytesRequest {
+            root_path: root_path.clone(),
+            relative_path: "chunk.bin".into(),
+            offset: 0,
+            length: MAX_CHUNK_BYTES as u64,
+        })
+        .unwrap();
+        assert_eq!(head["sizeBytes"], (first.len() + second.len()) as u64);
+        assert_eq!(head["eof"], false);
+        assert_eq!(
+            general_purpose::STANDARD
+                .decode(head["dataBase64"].as_str().unwrap())
+                .unwrap(),
+            first
+        );
+        let tail = read_bytes(FileReadBytesRequest {
+            root_path,
+            relative_path: "chunk.bin".into(),
+            offset: first.len() as u64,
+            length: MAX_CHUNK_BYTES as u64,
+        })
+        .unwrap();
+        assert_eq!(tail["eof"], true);
+        assert_eq!(
+            general_purpose::STANDARD
+                .decode(tail["dataBase64"].as_str().unwrap())
+                .unwrap(),
+            second
+        );
     }
 
     #[test]

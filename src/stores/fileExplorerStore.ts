@@ -80,6 +80,9 @@ function fileReadErrorMessage(error: unknown): string {
 }
 
 function fileSaveErrorMessage(error: unknown): string {
+  if (errorHasCode(error, "ssh_agent_capability_missing")) {
+    return translateCurrent("files.error.agentUpgradeRequired");
+  }
   if (errorHasCode(error, "text_encoding_unmappable")) {
     return translateCurrent("files.error.encodingUnmappable");
   }
@@ -114,6 +117,7 @@ interface FileExplorerStore {
   searchLoading: boolean;
   expandedPaths: Set<string>;
   selectedTreePath: string | null;
+  remoteWritable: boolean | null;
   loading: boolean;
   openFiles: ActiveProjectFile[];
   activeFilePath: string | null;
@@ -151,6 +155,7 @@ interface FileExplorerStore {
   setClipboard: (clipboard: FileClipboard | null) => void;
   pasteInto: (targetParentPath: string, overwrite: boolean) => Promise<void>;
   navigateToPath: (input: string) => Promise<boolean>;
+  selectTreePath: (path: string | null) => void;
   duplicateEntry: (path: string, name: string) => Promise<void>;
   downloadEntry: (path: string, targetPath: string) => Promise<void>;
   uploadInto: (parentPath: string, localPath: string, overwrite: boolean) => Promise<void>;
@@ -710,6 +715,7 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
   searchLoading: false,
   expandedPaths: new Set([""]),
   selectedTreePath: null,
+  remoteWritable: null,
   loading: false,
   openFiles: [],
   activeFilePath: null,
@@ -763,6 +769,7 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       searchLoading: false,
       expandedPaths: new Set([""]),
       selectedTreePath: null,
+      remoteWritable: null,
       openFiles,
       activeFilePath: activeFile?.path ?? null,
       activeFile,
@@ -777,11 +784,20 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       remoteContext = project.environment_type === "ssh" ? await buildSshRemoteFileContext(project) : null;
       if (remoteContext) await waitForRemoteFileContextRelease(remoteContext);
       if (requestSeq !== openProjectRequestSeq || !isSameProjectFileContext(get().project, project)) return;
-      set({ remoteFileContext: remoteContext });
+      set({ remoteFileContext: remoteContext, remoteWritable: remoteContext ? false : null });
       const [tree, gitChanges] = await Promise.all([
         remoteContext ? sshRemoteListDir(remoteContext) : listDir(project.path, ""),
         remoteContext ? Promise.resolve([]) : fetchGitChanges(project.path),
       ]);
+      let remoteWritable: boolean | null = remoteContext ? false : null;
+      if (remoteContext) {
+        try {
+          await sshRemoteStat(remoteContext, "");
+          remoteWritable = true;
+        } catch (error) {
+          remoteWritable = errorHasCode(error, "ssh_agent_capability_missing") ? false : null;
+        }
+      }
       if (
         requestSeq !== openProjectRequestSeq
         || !isSameProjectFileContext(get().project, project)
@@ -789,7 +805,7 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       ) {
         return;
       }
-      set({ tree, gitChanges, loading: false });
+      set({ tree, gitChanges, remoteWritable, loading: false });
     } catch (err) {
       if (requestSeq !== openProjectRequestSeq || !isSameProjectFileContext(get().project, project)) return;
       if (get().remoteFileContext === remoteContext) {
@@ -798,7 +814,7 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       }
       logError("Failed to open project files", err);
       toast.error("文件列表加载失败", { description: String(err) });
-      set({ tree: [], gitChanges: [], loading: false });
+      set({ tree: [], gitChanges: [], remoteWritable: null, loading: false });
     }
   },
 
@@ -825,6 +841,7 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       searchLoading: false,
       expandedPaths: new Set([""]),
       selectedTreePath: null,
+      remoteWritable: null,
       openFiles: [],
       activeFilePath: null,
       activeFile: null,
@@ -1522,6 +1539,8 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
     }
     return get().revealPath(relative);
   },
+
+  selectTreePath: (path) => set({ selectedTreePath: path }),
 
   duplicateEntry: async (path, name) => {
     const project = get().project;

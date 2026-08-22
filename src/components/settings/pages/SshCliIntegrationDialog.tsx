@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Copy, Download, FolderOpen, RefreshCw, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
@@ -167,6 +167,15 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [pickerSource, setPickerSource] = useState<SshToolSource | null>(null);
+  const describePickerError = useCallback((err: unknown) => {
+    const code = err instanceof Error ? err.message : String(err);
+    if (code === "ssh_host_not_found") return t("configModal.ssh.selectHost");
+    if (code === "ssh_interactive_auth_required") return t("configModal.ssh.interactiveBrowseUnavailable");
+    if (code === "ssh_remote_path_invalid") return t("configModal.ssh.pathInvalid");
+    if (code === "ssh_remote_path_parent_forbidden") return t("configModal.ssh.pathParentForbidden");
+    if (code === "cannot_delete_root") return t("configModal.ssh.pickerDeleteRoot");
+    return code;
+  }, [t]);
   const {
     path: pickerPath,
     setPath: setPickerPath,
@@ -178,7 +187,7 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
     deleteDirectory: deletePickerDirectory,
     goHome: goPickerHome,
     close: closePickerDirectories,
-  } = useSshDirectoryBrowser(host, hosts);
+  } = useSshDirectoryBrowser(host, hosts, { describeError: describePickerError });
   const [probing, setProbing] = useState(false);
   const [probeResult, setProbeResult] = useState<SshAgentProbeResult | null>(null);
   const [probeError, setProbeError] = useState("");
@@ -1045,6 +1054,7 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
               onDelete={deletePickerDirectory}
               pathLabel={t("settings.sshHosts.cliIntegration.pickerTitle")}
               emptyLabel={t("configModal.ssh.pickerEmpty")}
+              describeError={describePickerError}
             />
           </div>
           <DialogFooter className="border-t border-border px-4 py-3">
