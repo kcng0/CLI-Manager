@@ -7,6 +7,10 @@ use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
 
+use crate::file_manage::{
+    FileCreateRequest, FileDeleteRequest, FileRenameRequest, FileStatRequest, FileTransferRequest,
+    FileWriteBytesRequest, FileWriteTextRequest,
+};
 use crate::files::{
     FileAttachAbortRequest, FileAttachBeginRequest, FileAttachChunkRequest,
     FileAttachFinishRequest, FileAttachmentUploads, FileListRequest, FileReadRequest,
@@ -279,6 +283,7 @@ fn capabilities() -> Value {
         "fileSearch",
         "fileAttach",
         "fileAttachAny",
+        "fileManage",
         "gitListRepositories",
         "gitChanges",
         "gitDiff",
@@ -579,6 +584,150 @@ pub fn run_bridge(
                         Ok(entries) => {
                             response(request_id, "response", json!({ "entries": entries }))
                         }
+                        Err(code) => response(request_id, "error", json!({ "code": code })),
+                    },
+                    Err(_) => response(
+                        request_id,
+                        "error",
+                        json!({ "code": "remote_file_request_invalid" }),
+                    ),
+                },
+            };
+            write_frame(writer, &response)?;
+            continue;
+        }
+        if matches!(
+            frame.kind.as_str(),
+            "fileCreate"
+                | "fileRename"
+                | "fileDelete"
+                | "fileCopy"
+                | "fileMove"
+                | "fileWrite"
+                | "fileWriteBytes"
+                | "fileReadBytes"
+                | "fileStat"
+        ) {
+            let response = match frame.kind.as_str() {
+                "fileCreate" => match serde_json::from_value::<FileCreateRequest>(frame.payload) {
+                    Ok(request) => match crate::file_manage::create(request) {
+                        Ok(entry) => response(
+                            request_id,
+                            "response",
+                            serde_json::to_value(entry).unwrap_or(Value::Null),
+                        ),
+                        Err(code) => response(request_id, "error", json!({ "code": code })),
+                    },
+                    Err(_) => response(
+                        request_id,
+                        "error",
+                        json!({ "code": "remote_file_request_invalid" }),
+                    ),
+                },
+                "fileRename" => match serde_json::from_value::<FileRenameRequest>(frame.payload) {
+                    Ok(request) => match crate::file_manage::rename(request) {
+                        Ok(entry) => response(
+                            request_id,
+                            "response",
+                            serde_json::to_value(entry).unwrap_or(Value::Null),
+                        ),
+                        Err(code) => response(request_id, "error", json!({ "code": code })),
+                    },
+                    Err(_) => response(
+                        request_id,
+                        "error",
+                        json!({ "code": "remote_file_request_invalid" }),
+                    ),
+                },
+                "fileDelete" => match serde_json::from_value::<FileDeleteRequest>(frame.payload) {
+                    Ok(request) => match crate::file_manage::delete(request) {
+                        Ok(()) => response(request_id, "response", json!({ "accepted": true })),
+                        Err(code) => response(request_id, "error", json!({ "code": code })),
+                    },
+                    Err(_) => response(
+                        request_id,
+                        "error",
+                        json!({ "code": "remote_file_request_invalid" }),
+                    ),
+                },
+                "fileCopy" | "fileMove" => {
+                    match serde_json::from_value::<FileTransferRequest>(frame.payload) {
+                        Ok(request) => {
+                            let result = if frame.kind == "fileMove" {
+                                crate::file_manage::move_entry(request)
+                            } else {
+                                crate::file_manage::copy(request)
+                            };
+                            match result {
+                                Ok(entry) => response(
+                                    request_id,
+                                    "response",
+                                    serde_json::to_value(entry).unwrap_or(Value::Null),
+                                ),
+                                Err(code) => {
+                                    response(request_id, "error", json!({ "code": code }))
+                                }
+                            }
+                        }
+                        Err(_) => response(
+                            request_id,
+                            "error",
+                            json!({ "code": "remote_file_request_invalid" }),
+                        ),
+                    }
+                }
+                "fileWrite" => {
+                    match serde_json::from_value::<FileWriteTextRequest>(frame.payload) {
+                        Ok(request) => match crate::file_manage::write_text(request) {
+                            Ok(entry) => response(
+                                request_id,
+                                "response",
+                                serde_json::to_value(entry).unwrap_or(Value::Null),
+                            ),
+                            Err(code) => response(request_id, "error", json!({ "code": code })),
+                        },
+                        Err(_) => response(
+                            request_id,
+                            "error",
+                            json!({ "code": "remote_file_request_invalid" }),
+                        ),
+                    }
+                }
+                "fileWriteBytes" => {
+                    match serde_json::from_value::<FileWriteBytesRequest>(frame.payload) {
+                        Ok(request) => match crate::file_manage::write_bytes(request) {
+                            Ok(entry) => response(
+                                request_id,
+                                "response",
+                                serde_json::to_value(entry).unwrap_or(Value::Null),
+                            ),
+                            Err(code) => response(request_id, "error", json!({ "code": code })),
+                        },
+                        Err(_) => response(
+                            request_id,
+                            "error",
+                            json!({ "code": "remote_file_request_invalid" }),
+                        ),
+                    }
+                }
+                "fileReadBytes" => match serde_json::from_value::<FileStatRequest>(frame.payload) {
+                    Ok(request) => match crate::file_manage::read_bytes(request) {
+                        Ok(payload) => response(request_id, "response", payload),
+                        Err(code) => response(request_id, "error", json!({ "code": code })),
+                    },
+                    Err(_) => response(
+                        request_id,
+                        "error",
+                        json!({ "code": "remote_file_request_invalid" }),
+                    ),
+                },
+                _ => match serde_json::from_value::<FileStatRequest>(frame.payload) {
+                    Ok(request) => match crate::file_manage::stat(request) {
+                        Ok(entry) => response(
+                            request_id,
+                            "response",
+                            serde_json::to_value(entry).unwrap_or(Value::Null),
+                        ),
                         Err(code) => response(request_id, "error", json!({ "code": code })),
                     },
                     Err(_) => response(
@@ -900,6 +1049,7 @@ mod tests {
             "fileSearch",
             "fileAttach",
             "fileAttachAny",
+            "fileManage",
             "gitListRepositories",
             "gitChanges",
             "gitDiff",

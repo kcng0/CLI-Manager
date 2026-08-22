@@ -593,6 +593,26 @@ pub(crate) const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL: &str = "
               ";
 const MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_VERSION: i64 = 29;
 const MIGRATION_CREATE_HISTORY_GENERATED_TITLES_VERSION: i64 = 30;
+const MIGRATION_CREATE_SSH_PORT_FORWARDS_VERSION: i64 = 31;
+const MIGRATION_CREATE_SSH_PORT_FORWARDS_DESCRIPTION: &str = "create_ssh_port_forwards";
+const MIGRATION_CREATE_SSH_PORT_FORWARDS_SQL: &str = "
+CREATE TABLE IF NOT EXISTS ssh_port_forwards (
+    id TEXT PRIMARY KEY NOT NULL,
+    host_id TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL,
+    listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+    listen_port INTEGER NOT NULL,
+    target_host TEXT NOT NULL DEFAULT '',
+    target_port INTEGER NOT NULL DEFAULT 0,
+    auto_start INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(host_id) REFERENCES ssh_hosts(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ssh_port_forwards_host ON ssh_port_forwards(host_id);
+";
 const MIGRATION_CREATE_HISTORY_GENERATED_TITLES_DESCRIPTION: &str =
     "create_history_generated_titles_table";
 const MIGRATION_CREATE_HISTORY_GENERATED_TITLES_SQL: &str = "
@@ -969,6 +989,12 @@ fn migrations() -> Vec<Migration> {
             sql: MIGRATION_CREATE_HISTORY_GENERATED_TITLES_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: MIGRATION_CREATE_SSH_PORT_FORWARDS_VERSION,
+            description: MIGRATION_CREATE_SSH_PORT_FORWARDS_DESCRIPTION,
+            sql: MIGRATION_CREATE_SSH_PORT_FORWARDS_SQL,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -1253,6 +1279,7 @@ pub fn run() {
         .manage(git_watcher::GitWatcherBridge::new())
         .manage(commands::subagent_transcript::SubagentTranscriptBridge::new())
         .manage(commands::cc_connect::CcConnectManager::new())
+        .manage(commands::ssh_tunnels::SshTunnelManager::new())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(
             SqlBuilder::default()
@@ -1335,6 +1362,13 @@ pub fn run() {
             commands::ssh_db::ssh_db_record_history_source,
             commands::ssh::ssh_check_path,
             commands::ssh::ssh_list_directories,
+            commands::ssh::ssh_home_directory,
+            commands::ssh::ssh_create_directory,
+            commands::ssh::ssh_delete_directory,
+            commands::ssh_tunnels::ssh_tunnel_start,
+            commands::ssh_tunnels::ssh_tunnel_stop,
+            commands::ssh_tunnels::ssh_tunnel_status,
+            commands::ssh_tunnels::ssh_tunnel_list,
             commands::ssh_config::ssh_config_default_directory,
             commands::ssh_config::ssh_config_import_preview,
             commands::third_party_notification::third_party_notification_test_send,
@@ -1361,6 +1395,8 @@ pub fn run() {
             commands::fs::file_attach_data,
             commands::fs::file_cleanup_expired_attachments,
             commands::fs::file_move,
+            commands::fs::file_read_user_file,
+            commands::fs::file_write_user_file,
             commands::shell::open_windows_terminal,
             commands::shell::open_folder_in_explorer,
             commands::history::history_list_sessions,
@@ -1398,6 +1434,15 @@ pub fn run() {
             commands::ssh_files::ssh_remote_file_search,
             commands::ssh_files::ssh_remote_file_attach_data,
             commands::ssh_files::ssh_remote_file_attach_path,
+            commands::ssh_files::ssh_remote_file_create,
+            commands::ssh_files::ssh_remote_file_rename,
+            commands::ssh_files::ssh_remote_file_delete,
+            commands::ssh_files::ssh_remote_file_copy,
+            commands::ssh_files::ssh_remote_file_move,
+            commands::ssh_files::ssh_remote_file_write,
+            commands::ssh_files::ssh_remote_file_stat,
+            commands::ssh_files::ssh_remote_file_read_bytes,
+            commands::ssh_files::ssh_remote_file_write_bytes,
             commands::ssh_git::ssh_remote_git_request,
             commands::history::history_get_conversion_matrix,
             commands::history::history_refresh_index,
@@ -1900,10 +1945,13 @@ mod provider_migration_tests {
         assert!(title_migration
             .sql
             .contains("idx_history_generated_titles_state"));
-        assert!(registry
-            .iter()
-            .all(|migration| migration.version <= title_migration.version));
         assert!(registry.iter().any(|migration| migration.version == 29
             && migration.description == "optimize_unified_usage_record_queries"));
+        let latest = registry.iter().map(|migration| migration.version).max();
+        assert_eq!(latest, Some(31));
+        assert!(registry.iter().any(|migration| {
+            migration.version == 31
+                && migration.sql.contains("CREATE TABLE IF NOT EXISTS ssh_port_forwards")
+        }));
     }
 }

@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SshHost } from "../lib/types";
 import {
+  createSshDirectory,
   createSshDirectoryBrowserSession,
+  deleteSshDirectory,
+  joinSshDirectoryPath,
   listSshDirectories,
   normalizeSshDirectoryPath,
+  parentSshDirectoryPath,
   releaseSshDirectoryBrowserSession,
+  resolveSshHomeDirectory,
   sshDirectoryBrowserConnectionKey,
   type SshDirectoryBrowserSession,
   type SshDirectoryEntry,
@@ -40,8 +45,10 @@ export function useSshDirectoryBrowser(
   const requestSequenceRef = useRef(0);
   const requestAbortRef = useRef<AbortController | null>(null);
   const connectionKeyRef = useRef(connectionKey);
+  const pathRef = useRef(path);
   const mountedRef = useRef(true);
   connectionKeyRef.current = connectionKey;
+  pathRef.current = path;
 
   const releaseSession = useCallback((session: SshDirectoryBrowserSession | null) => {
     if (!session) return;
@@ -119,6 +126,28 @@ export function useSshDirectoryBrowser(
     setError("");
   }, []);
 
+  const createDirectory = useCallback(async (name: string) => {
+    const session = await getSession();
+    const nextPath = joinSshDirectoryPath(pathRef.current, name);
+    await createSshDirectory(session, nextPath);
+    await load(pathRef.current, { force: true });
+  }, [getSession, load]);
+
+  const deleteDirectory = useCallback(async (targetPath: string) => {
+    const normalized = normalizeSshDirectoryPath(targetPath);
+    if (normalized === "/") throw new Error("ssh_remote_path_invalid");
+    const session = await getSession();
+    await deleteSshDirectory(session, normalized);
+    const parent = parentSshDirectoryPath(normalized);
+    await load(parent, { force: true });
+  }, [getSession, load]);
+
+  const goHome = useCallback(async () => {
+    const session = await getSession();
+    const home = await resolveSshHomeDirectory(session);
+    await load(home, { force: true });
+  }, [getSession, load]);
+
   const close = useCallback(() => {
     requestAbortRef.current?.abort();
     requestAbortRef.current = null;
@@ -168,6 +197,9 @@ export function useSshDirectoryBrowser(
     loading,
     error,
     load,
+    createDirectory,
+    deleteDirectory,
+    goHome,
     close,
   };
 }

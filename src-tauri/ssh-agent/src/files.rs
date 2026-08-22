@@ -742,7 +742,7 @@ fn walk_search(
     Ok(())
 }
 
-fn resolve_root(value: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_root(value: &str) -> Result<PathBuf, String> {
     let value = value.trim();
     if !Path::new(value).is_absolute()
         || value.contains(['\0', '\r', '\n'])
@@ -760,7 +760,7 @@ fn resolve_root(value: &str) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-fn resolve_relative(root: &Path, relative: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_relative(root: &Path, relative: &str) -> Result<PathBuf, String> {
     if relative.contains(['\0', '\r', '\n', '\\'])
         || Path::new(relative).is_absolute()
         || relative.split('/').any(|part| part == "..")
@@ -777,7 +777,7 @@ fn resolve_relative(root: &Path, relative: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-fn relative_path(root: &Path, path: &Path) -> Result<String, String> {
+pub(crate) fn relative_path(root: &Path, path: &Path) -> Result<String, String> {
     path.strip_prefix(root)
         .map(|value| value.to_string_lossy().replace('\\', "/"))
         .map_err(|_| "remote_file_path_confined".to_string())

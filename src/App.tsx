@@ -40,6 +40,7 @@ import { useExternalSessionSyncStore } from "./stores/externalSessionSyncStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useDesktopPetCoordinator } from "./hooks/useDesktopPetCoordinator";
 import { useRemoteHandoffCoordinator } from "./hooks/useRemoteHandoffCoordinator";
+import { useSshTunnelStore } from "./stores/sshTunnelStore";
 import { useUpdateStore } from "./stores/updateStore";
 import { useReplayStore } from "./stores/replayStore";
 import { useTerminalStore, type CliHookPayload } from "./stores/terminalStore";
@@ -486,6 +487,9 @@ function runDeferredStartupTasks(openSettings?: (tab?: SettingsTab) => void): vo
 
       await useSyncStore.getState().load();
       await useSyncStore.getState().retryOutbox();
+      await useSshTunnelStore.getState().startAutoForwards().catch((err) => {
+        logWarn("Failed to start SSH auto port forwards", err);
+      });
     })();
 
     if (!startupUpdateChecked) {

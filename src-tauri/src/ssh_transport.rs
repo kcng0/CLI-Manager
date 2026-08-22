@@ -34,6 +34,27 @@ pub struct SshOneShotOptions {
     pub accept_new_host_key: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", tag = "mode")]
+pub enum SshForwardSpec {
+    Local {
+        listen_host: String,
+        listen_port: u16,
+        target_host: String,
+        target_port: u16,
+    },
+    Remote {
+        listen_host: String,
+        listen_port: u16,
+        target_host: String,
+        target_port: u16,
+    },
+    Dynamic {
+        listen_host: String,
+        listen_port: u16,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshTransportLaunch {
     pub executable: String,
@@ -196,6 +217,41 @@ impl SshTransportSpec {
         })
     }
 
+    pub fn build_tunnel_launch(
+        &self,
+        forward: &SshForwardSpec,
+    ) -> Result<SshTransportLaunch, String> {
+        self.validate()?;
+        if matches!(
+            self.auth_mode.as_str(),
+            "password_prompt" | "interactive"
+        ) {
+            return Err("ssh_interactive_auth_required".to_string());
+        }
+        validate_forward_spec(forward)?;
+        let mut args = vec!["-N".to_string(), "-T".to_string()];
+        args.extend([
+            "-o".to_string(),
+            "ExitOnForwardFailure=yes".to_string(),
+            "-o".to_string(),
+            if self.auth_mode == "credential_ref" {
+                "BatchMode=no".to_string()
+            } else {
+                "BatchMode=yes".to_string()
+            },
+        ]);
+        args.extend(forward_args(forward));
+        self.append_connection_args(&mut args, true);
+        self.append_auth_args(&mut args, true);
+        self.append_route_args(&mut args)?;
+        args.push(self.target());
+        Ok(SshTransportLaunch {
+            executable: "ssh".to_string(),
+            args,
+            env: self.askpass_environment(false)?,
+        })
+    }
+
     fn append_connection_args(&self, args: &mut Vec<String>, one_shot: bool) {
         if !self.config_file.trim().is_empty() {
             args.extend(["-F".to_string(), self.config_file.trim().to_string()]);
@@ -338,6 +394,88 @@ fn validate_config_file(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn validate_forward_host(value: &str) -> Result<(), String> {
+    let host = value.trim();
+    if host.is_empty() || host.len() > 253 {
+        return Err("ssh_forward_host_invalid".to_string());
+    }
+    if matches!(
+        host,
+        "127.0.0.1" | "localhost" | "0.0.0.0" | "::1" | "[::1]"
+    ) {
+        return Ok(());
+    }
+    if host.chars().any(|ch| {
+        !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | ':' | '[' | ']'))
+    }) {
+        return Err("ssh_forward_host_invalid".to_string());
+    }
+    if host.contains(['\0', '\r', '\n', '/', '\\', ' ', '@']) {
+        return Err("ssh_forward_host_invalid".to_string());
+    }
+    Ok(())
+}
+
+pub fn validate_forward_spec(forward: &SshForwardSpec) -> Result<(), String> {
+    match forward {
+        SshForwardSpec::Local {
+            listen_host,
+            listen_port,
+            target_host,
+            target_port,
+        }
+        | SshForwardSpec::Remote {
+            listen_host,
+            listen_port,
+            target_host,
+            target_port,
+        } => {
+            validate_forward_host(listen_host)?;
+            validate_forward_host(target_host)?;
+            if *listen_port == 0 || *target_port == 0 {
+                return Err("ssh_forward_port_invalid".to_string());
+            }
+        }
+        SshForwardSpec::Dynamic {
+            listen_host,
+            listen_port,
+        } => {
+            validate_forward_host(listen_host)?;
+            if *listen_port == 0 {
+                return Err("ssh_forward_port_invalid".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn forward_args(forward: &SshForwardSpec) -> Vec<String> {
+    match forward {
+        SshForwardSpec::Local {
+            listen_host,
+            listen_port,
+            target_host,
+            target_port,
+        } => vec![
+            "-L".to_string(),
+            format!("{listen_host}:{listen_port}:{target_host}:{target_port}"),
+        ],
+        SshForwardSpec::Remote {
+            listen_host,
+            listen_port,
+            target_host,
+            target_port,
+        } => vec![
+            "-R".to_string(),
+            format!("{listen_host}:{listen_port}:{target_host}:{target_port}"),
+        ],
+        SshForwardSpec::Dynamic {
+            listen_host,
+            listen_port,
+        } => vec!["-D".to_string(), format!("{listen_host}:{listen_port}")],
+    }
+}
+
 fn contains_url_credentials(value: &str) -> bool {
     value.split_whitespace().any(|token| {
         let Some((_, remainder)) = token.split_once("://") else {
@@ -353,8 +491,9 @@ fn contains_url_credentials(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        configure_askpass_terminal_fallback, format_remote_home_path, validate_remote_home_path,
-        SshOneShotOptions, SshRemoteHomePathError, SshTransportSpec,
+        configure_askpass_terminal_fallback, format_remote_home_path, validate_forward_spec,
+        validate_remote_home_path, SshForwardSpec, SshOneShotOptions, SshRemoteHomePathError,
+        SshTransportSpec,
     };
     use std::collections::HashMap;
 
@@ -568,6 +707,62 @@ mod tests {
         assert_eq!(
             validate_remote_home_path("$HOME/agent"),
             Err(SshRemoteHomePathError::Invalid)
+        );
+    }
+
+    #[test]
+    fn tunnel_launch_uses_no_shell_and_forward_flags() {
+        let local = spec("identity_file")
+            .build_tunnel_launch(&SshForwardSpec::Local {
+                listen_host: "127.0.0.1".into(),
+                listen_port: 8080,
+                target_host: "127.0.0.1".into(),
+                target_port: 80,
+            })
+            .unwrap();
+        assert_eq!(local.args.first().map(String::as_str), Some("-N"));
+        assert!(local.args.windows(2).any(|pair| {
+            pair[0] == "-L" && pair[1] == "127.0.0.1:8080:127.0.0.1:80"
+        }));
+        assert!(local.args.iter().any(|arg| arg == "ExitOnForwardFailure=yes"));
+        assert!(!local.args.iter().any(|arg| arg == "true" || arg == "shell"));
+
+        let dynamic = spec("agent")
+            .build_tunnel_launch(&SshForwardSpec::Dynamic {
+                listen_host: "127.0.0.1".into(),
+                listen_port: 1080,
+            })
+            .unwrap();
+        assert!(dynamic.args.windows(2).any(|pair| pair[0] == "-D" && pair[1] == "127.0.0.1:1080"));
+
+        assert_eq!(
+            spec("interactive")
+                .build_tunnel_launch(&SshForwardSpec::Dynamic {
+                    listen_host: "127.0.0.1".into(),
+                    listen_port: 1080,
+                })
+                .unwrap_err(),
+            "ssh_interactive_auth_required"
+        );
+        assert_eq!(
+            validate_forward_spec(&SshForwardSpec::Local {
+                listen_host: "127.0.0.1".into(),
+                listen_port: 0,
+                target_host: "127.0.0.1".into(),
+                target_port: 80,
+            })
+            .unwrap_err(),
+            "ssh_forward_port_invalid"
+        );
+        assert_eq!(
+            validate_forward_spec(&SshForwardSpec::Local {
+                listen_host: "evil host".into(),
+                listen_port: 80,
+                target_host: "127.0.0.1".into(),
+                target_port: 80,
+            })
+            .unwrap_err(),
+            "ssh_forward_host_invalid"
         );
     }
 }

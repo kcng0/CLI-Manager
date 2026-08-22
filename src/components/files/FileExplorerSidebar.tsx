@@ -34,21 +34,25 @@ import {
   isFileExplorerIgnoreCaseInsensitive,
   type FileExplorerIgnoreMatcher,
 } from "../../lib/fileExplorerIgnore";
-import type { GitFileChange, ProjectFileContentMatch, ProjectFileEntry, ProjectFileSearchMode } from "../../lib/types";
+import type { GitFileChange, Project, ProjectFileContentMatch, ProjectFileEntry, ProjectFileSearchMode } from "../../lib/types";
 import { isDefaultCollapsedDirectoryName, useFileExplorerStore } from "../../stores/fileExplorerStore";
 import {
   createGitDiffWorkspaceContext,
   useGitDiffWorkspaceStore,
 } from "../../stores/gitDiffWorkspaceStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { useTerminalStore } from "../../stores/terminalStore";
+import { formatStartupInputForPty, useTerminalStore } from "../../stores/terminalStore";
 import { STATUS_CONFIG } from "../git/GitStatusIcon";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "../ui/dialog";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../ui/context-menu";
 import { Portal } from "../ui/Portal";
-import { ChevronRight, Copy, EyeOff, File, FileCode, Folder, FolderOpen, FolderPlus, Pencil, RefreshCw, Search, Trash2, X } from "../icons";
+import { ChevronRight, Copy, CopyPlus, Download, EyeOff, File, FileCode, Folder, FolderOpen, FolderPlus, Info, Pencil, RefreshCw, Scissors, Search, Terminal, Trash2, Upload, X } from "../icons";
+import { FileExplorerPathBar } from "./FileExplorerPathBar";
+import { buildExplorerCdCommand, formatExplorerAddress, parentExplorerRelativePath } from "../../lib/fileExplorerPath";
+import { terminalProcessManager } from "../../terminal/core/TerminalProcessManager";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { TERM } from "../stats/termStatsUi";
 import { TerminalPanelHeader } from "../terminal/TerminalPanelHeader";
 import { PathCopyMenu } from "../PathCopyMenu";
@@ -136,6 +140,24 @@ function getDisplayPathName(path: string): string {
   return normalized.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
+function findEntryInTree(entries: ProjectFileEntry[], path: string): ProjectFileEntry | null {
+  for (const entry of entries) {
+    if (entry.path === path) return entry;
+    if (entry.children) {
+      const nested = findEntryInTree(entry.children, path);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function createParentPath(selectedPath: string, tree: ProjectFileEntry[]): string {
+  if (!selectedPath) return "";
+  const entry = findEntryInTree(tree, selectedPath);
+  if (!entry || entry.kind === "file") return parentExplorerRelativePath(selectedPath);
+  return selectedPath;
+}
+
 function joinProjectPath(rootPath: string, relativePath: string): string {
   const root = rootPath.replace(/[\\/]+$/g, "");
   const relative = relativePath.trim().replace(/^[\\/]+/g, "");
@@ -149,6 +171,61 @@ async function openFileBrowserFolder(rootPath: string, relativePath: string, t: 
     await invoke("open_folder_in_explorer", { path: joinProjectPath(rootPath, relativePath) });
   } catch (err) {
     toast.error(t("files.toast.openFolderFailed"), { description: String(err) });
+  }
+}
+
+function describeExplorerError(error: unknown, t: Translate): string {
+  const message = String(error);
+  if (message.includes("ssh_agent_capability_missing")) return t("files.error.agentUpgradeRequired");
+  if (message.includes("remote_file_context_unavailable")) return t("files.error.remoteUnavailable");
+  if (message.includes("target_exists")) return t("files.confirm.overwriteMessage");
+  return message;
+}
+
+async function openExplorerPathInTerminal(project: Project, relativePath: string, t: Translate) {
+  const { sessions, activeSessionId } = useTerminalStore.getState();
+  const usable = sessions.filter((session) => (
+    session.projectId === project.id
+    && session.kind !== "file-editor"
+    && session.kind !== "subagent-transcript"
+    && session.kind !== "synced-history"
+  ));
+  const session = usable.find((item) => item.id === activeSessionId) ?? usable[0];
+  if (!session) {
+    toast.error(t("files.toast.noTerminal"));
+    return;
+  }
+  const command = buildExplorerCdCommand(project, relativePath, session.shell);
+  try {
+    await terminalProcessManager.write(session.id, formatStartupInputForPty(command, session.shell));
+    toast.success(t("files.toast.terminalCd"));
+  } catch (error) {
+    toast.error(t("files.toast.terminalCdFailed"), { description: describeExplorerError(error, t) });
+  }
+}
+
+async function downloadExplorerEntry(path: string, name: string, t: Translate) {
+  const target = await save({ defaultPath: name });
+  if (typeof target !== "string" || !target) return;
+  try {
+    await useFileExplorerStore.getState().downloadEntry(path, target);
+    toast.success(t("files.toast.downloaded"));
+  } catch (error) {
+    toast.error(t("files.toast.downloadFailed"), { description: describeExplorerError(error, t) });
+  }
+}
+
+async function uploadExplorerFiles(parentPath: string, t: Translate) {
+  const selected = await open({ multiple: true, directory: false });
+  const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
+  if (paths.length === 0) return;
+  try {
+    for (const localPath of paths) {
+      await useFileExplorerStore.getState().uploadInto(parentPath, localPath, false);
+    }
+    toast.success(t("files.toast.uploaded"));
+  } catch (error) {
+    toast.error(t("files.toast.uploadFailed"), { description: describeExplorerError(error, t) });
   }
 }
 
@@ -389,6 +466,7 @@ function FileNode({
   onOpenDiff,
   onInput,
   onConfirm,
+  onProperties,
   renamingPath,
   onRenameSubmit,
   onRenameCancel,
@@ -415,6 +493,7 @@ function FileNode({
   onOpenDiff: (change: GitFileChange) => void;
   onInput: (action: InputAction) => void;
   onConfirm: (action: ConfirmAction) => void;
+  onProperties?: (entry: ProjectFileEntry) => void;
   renamingPath: string | null;
   onRenameSubmit: (action: RenameAction, value: string) => void;
   onRenameCancel: () => void;
@@ -494,6 +573,7 @@ function FileNode({
       onOpenDiff={onOpenDiff}
       onInput={onInput}
       onConfirm={onConfirm}
+      onProperties={onProperties}
       renamingPath={renamingPath}
       onRenameSubmit={onRenameSubmit}
       onRenameCancel={onRenameCancel}
@@ -643,11 +723,38 @@ function FileNode({
           {!readOnly && <ContextMenuItem onSelect={() => setClipboard({ mode: "copy", path: displayEntry.path, name: displayEntry.name })}>
             <Copy size={13} /> {t("files.menu.copy")}
           </ContextMenuItem>}
+          {!readOnly && <ContextMenuItem onSelect={() => setClipboard({ mode: "move", path: displayEntry.path, name: displayEntry.name })}>
+            <Scissors size={13} /> {t("files.menu.cut")}
+          </ContextMenuItem>}
+          {!readOnly && <ContextMenuItem onSelect={() => void useFileExplorerStore.getState().duplicateEntry(displayEntry.path, displayEntry.name).catch((error) => {
+            toast.error(t("files.toast.duplicateFailed"), { description: describeExplorerError(error, t) });
+          })}>
+            <CopyPlus size={13} /> {t("files.menu.duplicate")}
+          </ContextMenuItem>}
+          <ContextMenuItem onSelect={() => void copyAiText(displayEntry.name, t("files.toast.nameCopied"))}>
+            <Copy size={13} /> {t("files.menu.copyName")}
+          </ContextMenuItem>
           {project && (
             <>
-              {!readOnly && <ContextMenuItem onSelect={() => void openFileBrowserFolder(project.path, displayEntry.path, t)}>
+              {project.environment_type !== "ssh" && <ContextMenuItem onSelect={() => void openFileBrowserFolder(project.path, displayEntry.path, t)}>
                 <FolderOpen size={13} /> {t("files.menu.openContainingFolder")}
               </ContextMenuItem>}
+              <ContextMenuItem onSelect={() => void openExplorerPathInTerminal(project, isDir ? displayEntry.path : parentExplorerRelativePath(displayEntry.path), t)}>
+                <Terminal size={13} /> {t("files.menu.openInTerminal")}
+              </ContextMenuItem>
+              {project.environment_type === "ssh" && !isDir && (
+                <ContextMenuItem onSelect={() => void downloadExplorerEntry(displayEntry.path, displayEntry.name, t)}>
+                  <Download size={13} /> {t("files.menu.download")}
+                </ContextMenuItem>
+              )}
+              {project.environment_type === "ssh" && isDir && (
+                <ContextMenuItem onSelect={() => void uploadExplorerFiles(displayEntry.path, t)}>
+                  <Upload size={13} /> {t("files.menu.upload")}
+                </ContextMenuItem>
+              )}
+              <ContextMenuItem onSelect={() => onProperties?.(displayEntry)}>
+                <Info size={13} /> {t("files.menu.properties")}
+              </ContextMenuItem>
               <ContextMenuSeparator />
               <PathCopyMenu project={project} relativePath={displayEntry.path} kind={displayEntry.kind} />
               {isDir && (
@@ -695,6 +802,7 @@ function FileTreeRows({
   menuPortalContainer,
   renderAutoCollapsedGroup,
   readOnly = false,
+  onProperties,
 }: {
   entries: ProjectFileEntry[];
   parentPath: string;
@@ -705,6 +813,7 @@ function FileTreeRows({
   onOpenDiff: (change: GitFileChange) => void;
   onInput: (action: InputAction) => void;
   onConfirm: (action: ConfirmAction) => void;
+  onProperties?: (entry: ProjectFileEntry) => void;
   renamingPath: string | null;
   onRenameSubmit: (action: RenameAction, value: string) => void;
   onRenameCancel: () => void;
@@ -741,6 +850,7 @@ function FileTreeRows({
           onOpenDiff={onOpenDiff}
           onInput={onInput}
           onConfirm={onConfirm}
+          onProperties={onProperties}
           renamingPath={renamingPath}
           onRenameSubmit={onRenameSubmit}
           onRenameCancel={onRenameCancel}
@@ -778,6 +888,7 @@ function FileTreeRows({
               onOpenDiff={onOpenDiff}
               onInput={onInput}
               onConfirm={onConfirm}
+              onProperties={onProperties}
               renamingPath={renamingPath}
               onRenameSubmit={onRenameSubmit}
               onRenameCancel={onRenameCancel}
@@ -807,7 +918,9 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const { t } = useI18n();
   const [menuPortalContainer, setMenuPortalContainer] = useState<HTMLDivElement | null>(null);
   const project = useFileExplorerStore((s) => s.project);
-  const readOnly = project?.environment_type === "ssh";
+  const isSsh = project?.environment_type === "ssh";
+  const localFs = !isSsh;
+  const readOnly = false;
   const tree = useFileExplorerStore((s) => s.tree);
   const loading = useFileExplorerStore((s) => s.loading);
   const selectedTreePath = useFileExplorerStore((s) => s.selectedTreePath);
@@ -834,12 +947,18 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const deleteEntry = useFileExplorerStore((s) => s.deleteEntry);
   const pasteInto = useFileExplorerStore((s) => s.pasteInto);
   const setClipboard = useFileExplorerStore((s) => s.setClipboard);
+  const navigateToPath = useFileExplorerStore((s) => s.navigateToPath);
+  const duplicateEntry = useFileExplorerStore((s) => s.duplicateEntry);
+  const downloadEntry = useFileExplorerStore((s) => s.downloadEntry);
+  const uploadInto = useFileExplorerStore((s) => s.uploadInto);
+  const statEntry = useFileExplorerStore((s) => s.statEntry);
   const fileExplorerIgnoredPaths = useSettingsStore((s) => s.fileExplorerIgnoredPaths);
   const updateSetting = useSettingsStore((s) => s.update);
   const [inputAction, setInputAction] = useState<InputAction | null>(null);
   const [inputValue, setInputValue] = useState("");
   const [renamingAction, setRenamingAction] = useState<RenameAction | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const [propertiesEntry, setPropertiesEntry] = useState<ProjectFileEntry | null>(null);
   const [expandedAutoCollapseGroups, setExpandedAutoCollapseGroups] = useState<Set<string>>(new Set());
   /** null = not loaded or unavailable; fallback rules remain active. */
   const [projectGitIgnoreMatcher, setProjectGitIgnoreMatcher] = useState<FileExplorerIgnoreMatcher | null>(null);
@@ -874,7 +993,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
 
   // Issue #147：优先读取项目根 .gitignore；不存在则回退内置默认规则
   useEffect(() => {
-    if (readOnly || !project?.path) {
+    if (!localFs || !project?.path) {
       setProjectGitIgnoreMatcher(null);
       setGitIgnoreLoadState("missing");
       return;
@@ -898,14 +1017,14 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
     return () => {
       cancelled = true;
     };
-  }, [project?.path, readOnly, gitIgnoreCaseInsensitive, gitIgnoreRefreshSeq]);
+  }, [project?.path, localFs, gitIgnoreCaseInsensitive, gitIgnoreRefreshSeq]);
 
   useEffect(() => {
     if (searchQuery.trim()) setSearchControlsVisible(true);
   }, [searchQuery]);
 
   useEffect(() => {
-    if (!project?.path || readOnly) return;
+    if (!project?.path || !localFs) return;
 
     let disposed = false;
     let unlisten: (() => void) | undefined;
@@ -982,7 +1101,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
       document.removeEventListener("visibilitychange", onVisibility);
       void invoke("file_watch_stop", { projectPath: project.path }).catch(() => {});
     };
-  }, [project?.path, readOnly, refreshVisibleState]);
+  }, [project?.path, localFs, refreshVisibleState]);
 
   const hasSearchQuery = Boolean(searchQuery.trim());
 
@@ -1486,9 +1605,12 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent className="file-explorer-menu" portalContainer={menuPortalContainer}>
-          {!readOnly && <ContextMenuItem onSelect={() => void openFileBrowserFolder(project.path, match.path, t)}>
+          {localFs && <ContextMenuItem onSelect={() => void openFileBrowserFolder(project.path, match.path, t)}>
             <FolderOpen size={13} /> {t("files.menu.openContainingFolder")}
           </ContextMenuItem>}
+          <ContextMenuItem onSelect={() => void openExplorerPathInTerminal(project, parentExplorerRelativePath(match.path), t)}>
+            <Terminal size={13} /> {t("files.menu.openInTerminal")}
+          </ContextMenuItem>
           <PathCopyMenu project={project} relativePath={match.path} kind="file" />
           {(() => {
             const change = getGitChange(match.path);
@@ -1575,9 +1697,12 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="file-explorer-menu" portalContainer={menuPortalContainer}>
-        {!readOnly && <ContextMenuItem onSelect={() => void openFileBrowserFolder(project.path, entry.path, t)}>
+        {localFs && <ContextMenuItem onSelect={() => void openFileBrowserFolder(project.path, entry.path, t)}>
           <FolderOpen size={13} /> {t("files.menu.openContainingFolder")}
         </ContextMenuItem>}
+          <ContextMenuItem onSelect={() => void openExplorerPathInTerminal(project, entry.kind === "directory" ? entry.path : parentExplorerRelativePath(entry.path), t)}>
+            <Terminal size={13} /> {t("files.menu.openInTerminal")}
+          </ContextMenuItem>
           <PathCopyMenu project={project} relativePath={entry.path} kind={entry.kind} />
           {entry.kind === "directory" && (
             <ContextMenuItem onSelect={() => void copyAiText(formatAiTree(project, entry), t("files.toast.aiTreeCopied"))}>
@@ -1637,6 +1762,12 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         onOpenDiff={requestOpenDiff}
         onInput={openInput}
         onConfirm={setConfirmAction}
+        onProperties={(entry) => {
+          setPropertiesEntry(entry);
+          void useFileExplorerStore.getState().statEntry(entry.path).then((fresh) => {
+            if (fresh) setPropertiesEntry(fresh);
+          }).catch(() => undefined);
+        }}
         renamingPath={renamingAction?.path ?? null}
         onRenameSubmit={(action, value) => void submitRename(action, value)}
         onRenameCancel={cancelRename}
@@ -1678,8 +1809,9 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const closeLabel = mode === "panel" ? t("files.closePanel") : t("files.backToProjects");
   const searchLabel = searchMode === "content" ? t("files.searchCodePlaceholder") : t("files.searchPlaceholder");
   const searchToggleLabel = searchControlsVisible ? t("files.hideSearch") : searchLabel;
-  const displayPathName = getDisplayPathName(readOnly ? project.remote_path : project.path);
-  const hasHeaderExtras = searchControlsVisible || readOnly || Boolean(clipboard);
+  const displayPathName = getDisplayPathName(isSsh ? project.remote_path : project.path);
+  const selectedRelativePath = selectedTreePath ?? "";
+  const hasHeaderExtras = true;
   const headerActions = (
     <>
       <button
@@ -1734,8 +1866,29 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
           </div>
         </div>
       )}
-      {readOnly && <div className="mt-1 text-[10px] text-text-muted">{t("files.readOnly")}</div>}
-      {!readOnly && clipboard && <div className="mt-1 truncate text-[10px] text-text-muted">{clipboard.mode === "copy" ? t("files.clipboard.copy") : t("files.clipboard.move")}：{clipboard.name}</div>}
+      <FileExplorerPathBar
+        project={project}
+        selectedPath={selectedRelativePath}
+        onNavigate={navigateToPath}
+        onParent={() => {
+          void navigateToPath(formatExplorerAddress(project, parentExplorerRelativePath(selectedRelativePath)));
+        }}
+        onRoot={() => {
+          void navigateToPath(formatExplorerAddress(project, ""));
+        }}
+        onRefresh={() => void refresh()}
+        onNewFile={() => openInput({ kind: "create-file", parentPath: createParentPath(selectedRelativePath, tree) })}
+        onNewFolder={() => openInput({ kind: "create-dir", parentPath: createParentPath(selectedRelativePath, tree) })}
+        parentLabel={t("common.parentDirectory")}
+        rootLabel={t("files.toolbar.root")}
+        refreshLabel={t("files.refreshList")}
+        pathLabel={t("files.path.input")}
+        newFileLabel={t("files.menu.newFile")}
+        newFolderLabel={t("files.menu.newFolder")}
+        invalidPathLabel={t("files.path.invalid")}
+      />
+      {isSsh && <div className="mt-1 text-[10px] text-text-muted">{t("files.remoteWritable")}</div>}
+      {clipboard && <div className="mt-1 truncate text-[10px] text-text-muted">{clipboard.mode === "copy" ? t("files.clipboard.copy") : t("files.clipboard.move")}：{clipboard.name}</div>}
     </>
   );
   const panelStyle = mode === "panel"
@@ -1789,7 +1942,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
             accent={TERM.blue}
             title={project.name}
             subtitle={displayPathName}
-            onTitleDoubleClick={readOnly ? undefined : openProjectRootFolder}
+            onTitleDoubleClick={localFs ? openProjectRootFolder : undefined}
             actions={headerActions}
           />
           {hasHeaderExtras && <div className="shrink-0 border-b border-border px-2 py-2">{headerExtras}</div>}
@@ -1797,10 +1950,10 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
       ) : (
         <div className="shrink-0 border-b border-border px-2 py-2">
           <div className="mb-2 flex items-center gap-2">
-            <span className="flex shrink-0" onDoubleClick={readOnly ? undefined : openProjectRootFolder}>
+            <span className="flex shrink-0" onDoubleClick={localFs ? openProjectRootFolder : undefined}>
               <Folder size={15} className="ui-file-explorer-root-icon" />
             </span>
-            <div className="min-w-0 flex-1" onDoubleClick={readOnly ? undefined : openProjectRootFolder}>
+            <div className="min-w-0 flex-1" onDoubleClick={localFs ? openProjectRootFolder : undefined}>
               <div className="ui-file-explorer-title truncate text-xs font-semibold">{project.name}</div>
               <div className="ui-file-explorer-subtitle truncate text-[10px]">{displayPathName}</div>
             </div>
@@ -1833,8 +1986,14 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
             <Copy size={13} /> {t("files.menu.paste")}
           </ContextMenuItem>}
           {!readOnly && <ContextMenuSeparator />}
-          {!readOnly && <ContextMenuItem onSelect={openProjectRootFolder}>
+          {localFs && <ContextMenuItem onSelect={openProjectRootFolder}>
             <FolderOpen size={13} /> {t("files.menu.openContainingFolder")}
+          </ContextMenuItem>}
+          <ContextMenuItem onSelect={() => void openExplorerPathInTerminal(project, "", t)}>
+            <Terminal size={13} /> {t("files.menu.openInTerminal")}
+          </ContextMenuItem>
+          {isSsh && <ContextMenuItem onSelect={() => void uploadExplorerFiles("", t)}>
+            <Upload size={13} /> {t("files.menu.upload")}
           </ContextMenuItem>}
           <PathCopyMenu project={project} relativePath="" kind="directory" />
           <ContextMenuItem onSelect={copyRootAiTree}>
@@ -1894,6 +2053,25 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
           }
         }}
       />
+      <Dialog open={propertiesEntry !== null} onOpenChange={(open) => { if (!open) setPropertiesEntry(null); }}>
+        <DialogContent className="max-w-[420px]">
+          <DialogTitle>{t("files.properties.title")}</DialogTitle>
+          {propertiesEntry && (
+            <div className="mt-3 space-y-2 text-xs text-on-surface">
+              <div><span className="text-text-muted">{t("files.properties.name")}: </span>{propertiesEntry.name}</div>
+              <div className="break-all"><span className="text-text-muted">{t("files.properties.path")}: </span>{formatExplorerAddress(project, propertiesEntry.path)}</div>
+              <div><span className="text-text-muted">{t("files.properties.kind")}: </span>{propertiesEntry.kind === "directory" ? t("files.properties.directory") : t("files.properties.file")}</div>
+              <div><span className="text-text-muted">{t("files.properties.size")}: </span>{propertiesEntry.sizeBytes}</div>
+              {propertiesEntry.modifiedMs ? (
+                <div><span className="text-text-muted">{t("files.properties.modified")}: </span>{new Date(propertiesEntry.modifiedMs).toLocaleString(undefined, { hour12: false })}</div>
+              ) : null}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPropertiesEntry(null)}>{t("common.close")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

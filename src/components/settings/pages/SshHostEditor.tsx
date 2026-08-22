@@ -1,12 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState, type MutableRefObject, type ReactNode, type UIEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronDown, ChevronRight, Copy, Folder, KeyRound, Route, Server, SlidersHorizontal, Terminal, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, Folder, KeyRound, Network, Route, Server, SlidersHorizontal, Terminal, X } from "lucide-react";
+import { SshHostTunnelSection } from "./SshHostTunnelSection";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import type { CreateSshHostInput, SshAuthMode, SshHost, SshHostGroup, SshJumpMode, SshProxyType } from "../../../lib/types";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "../../ui/dialog";
 import { Select } from "../../ui/select";
 
-type Section = "basic" | "auth" | "routing" | "connection" | "startup";
+type Section = "basic" | "auth" | "routing" | "connection" | "startup" | "tunnels";
 type Source = "address" | "config";
 type SetValue = <K extends keyof CreateSshHostInput>(key: K, value: CreateSshHostInput[K]) => void;
 
@@ -41,6 +42,7 @@ const SECTIONS: Array<{ id: Section; icon: typeof Server; label: TranslationKey 
   { id: "routing", icon: Route, label: "settings.sshHosts.section.routing" },
   { id: "connection", icon: SlidersHorizontal, label: "settings.sshHosts.section.connection" },
   { id: "startup", icon: Terminal, label: "settings.sshHosts.section.startup" },
+  { id: "tunnels", icon: Network, label: "settings.sshHosts.section.tunnels" },
 ];
 
 const STAGE_LABELS: Record<string, TranslationKey> = {
@@ -70,7 +72,7 @@ export function SshHostEditor(props: Props) {
   const [diagnosticOpen, setDiagnosticOpen] = useState(false);
   const wasTestingRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const sectionRefs = useRef<Record<Section, HTMLElement | null>>({ basic: null, auth: null, routing: null, connection: null, startup: null });
+  const sectionRefs = useRef<Record<Section, HTMLElement | null>>({ basic: null, auth: null, routing: null, connection: null, startup: null, tunnels: null });
 
   useEffect(() => {
     if (!props.open) return;
@@ -151,6 +153,9 @@ export function SshHostEditor(props: Props) {
           </FormSection>
           <FormSection section="startup" title={t("settings.sshHosts.section.startup")} description={t("settings.sshHosts.section.startupDescription")} sectionRefs={sectionRefs}>
             <StartupFields form={props.form} setValue={props.setValue} />
+          </FormSection>
+          <FormSection section="tunnels" title={t("settings.sshHosts.section.tunnels")} description={t("settings.sshHosts.section.tunnelsDescription")} sectionRefs={sectionRefs}>
+            <SshHostTunnelSection hostId={props.editingId} />
           </FormSection>
         </div>
         <DialogFooter className="shrink-0 flex items-center justify-between border-t border-border px-5 py-3">

@@ -20,11 +20,20 @@ import {
   buildSshRemoteFileContext,
   releaseSshRemoteFileContext,
   remoteEntryToSearchMatch,
+  sshRemoteCreateEntry,
+  sshRemoteDeleteEntry,
   sshRemoteListDir,
+  sshRemoteReadBytes,
   sshRemoteReadFile,
+  sshRemoteRenameEntry,
   sshRemoteSearch,
+  sshRemoteStat,
+  sshRemoteTransferEntry,
+  sshRemoteWriteBytes,
+  sshRemoteWriteText,
   type SshRemoteFileContext,
 } from "../lib/sshRemoteFiles";
+import { nextDuplicateName, parseExplorerPathInput } from "../lib/fileExplorerPath";
 
 type ClipboardMode = "copy" | "move";
 type FileEntryKind = "file" | "directory";
@@ -141,6 +150,11 @@ interface FileExplorerStore {
   deleteEntry: (path: string) => Promise<void>;
   setClipboard: (clipboard: FileClipboard | null) => void;
   pasteInto: (targetParentPath: string, overwrite: boolean) => Promise<void>;
+  navigateToPath: (input: string) => Promise<boolean>;
+  duplicateEntry: (path: string, name: string) => Promise<void>;
+  downloadEntry: (path: string, targetPath: string) => Promise<void>;
+  uploadInto: (parentPath: string, localPath: string, overwrite: boolean) => Promise<void>;
+  statEntry: (path: string) => Promise<ProjectFileEntry | null>;
 }
 
 export const DEFAULT_COLLAPSED_DIRECTORY_NAMES = [
@@ -1322,17 +1336,22 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
 
   saveFile: async (path) => {
     const project = get().project;
-    if (project?.environment_type === "ssh") throw new Error("remote_project_read_only");
     const file = get().openFiles.find((item) => item.path === path);
     if (!project || !file || file.previewKind === "image" || !file.encoding) return;
     try {
-      await invoke("file_write_project_text", {
-        rootPath: project.path,
-        relativePath: file.path,
-        content: file.content,
-        encoding: file.encoding,
-        hasBom: file.hasBom,
-      });
+      const remoteFileContext = get().remoteFileContext;
+      if (project.environment_type === "ssh") {
+        if (!remoteFileContext) throw new Error("remote_file_context_unavailable");
+        await sshRemoteWriteText(remoteFileContext, file.path, file.content);
+      } else {
+        await invoke("file_write_project_text", {
+          rootPath: project.path,
+          relativePath: file.path,
+          content: file.content,
+          encoding: file.encoding,
+          hasBom: file.hasBom,
+        });
+      }
     } catch (err) {
       logError("Failed to save project file", err);
       toast.error(translateCurrent("files.toast.saveFailed"), {
@@ -1378,10 +1397,15 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
 
   createEntry: async (parent, name, kind, overwrite) => {
     const project = get().project;
-    if (project?.environment_type === "ssh") throw new Error("remote_project_read_only");
     if (!project) return;
-    const command = kind === "directory" ? "file_create_dir" : "file_create_file";
-    await invoke(command, { rootPath: project.path, parentPath: parent, name, overwrite });
+    const remoteFileContext = get().remoteFileContext;
+    if (project.environment_type === "ssh") {
+      if (!remoteFileContext) throw new Error("remote_file_context_unavailable");
+      await sshRemoteCreateEntry(remoteFileContext, parent, name, kind, overwrite);
+    } else {
+      const command = kind === "directory" ? "file_create_dir" : "file_create_file";
+      await invoke(command, { rootPath: project.path, parentPath: parent, name, overwrite });
+    }
     await get().loadDir(parent);
     await get().refreshGitChanges();
     if (get().searchQuery.trim()) await get().setSearchQuery(get().searchQuery);
@@ -1389,14 +1413,19 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
 
   renameEntry: async (path, newName, overwrite) => {
     const project = get().project;
-    if (project?.environment_type === "ssh") throw new Error("remote_project_read_only");
     if (!project) return;
-    await invoke("file_rename", {
-      rootPath: project.path,
-      relativePath: path,
-      newName,
-      overwrite,
-    });
+    const remoteFileContext = get().remoteFileContext;
+    if (project.environment_type === "ssh") {
+      if (!remoteFileContext) throw new Error("remote_file_context_unavailable");
+      await sshRemoteRenameEntry(remoteFileContext, path, newName, overwrite);
+    } else {
+      await invoke("file_rename", {
+        rootPath: project.path,
+        relativePath: path,
+        newName,
+        overwrite,
+      });
+    }
     await get().loadDir(parentPath(path));
     await get().refreshGitChanges();
     const openFiles = get().openFiles.filter((file) => !isSameOrChildPath(file.path, path));
@@ -1407,9 +1436,14 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
 
   deleteEntry: async (path) => {
     const project = get().project;
-    if (project?.environment_type === "ssh") throw new Error("remote_project_read_only");
     if (!project) return;
-    await invoke("file_delete", { rootPath: project.path, relativePath: path });
+    const remoteFileContext = get().remoteFileContext;
+    if (project.environment_type === "ssh") {
+      if (!remoteFileContext) throw new Error("remote_file_context_unavailable");
+      await sshRemoteDeleteEntry(remoteFileContext, path);
+    } else {
+      await invoke("file_delete", { rootPath: project.path, relativePath: path });
+    }
     await get().loadDir(parentPath(path));
     await get().refreshGitChanges();
     const openFiles = get().openFiles.filter((file) => !isSameOrChildPath(file.path, path));
@@ -1422,24 +1456,38 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
 
   pasteInto: async (targetParentPath, overwrite) => {
     const project = get().project;
-    if (project?.environment_type === "ssh") throw new Error("remote_project_read_only");
     const clipboard = get().clipboard;
     if (!project || !clipboard) return;
-    const command = clipboard.mode === "copy" ? "file_copy" : "file_move";
-    await invoke(command, {
-      rootPath: project.path,
-      sourcePath: clipboard.path,
-      targetParentPath,
-      name: clipboard.name,
-      overwrite,
-    });
+    const remoteFileContext = get().remoteFileContext;
+    if (project.environment_type === "ssh") {
+      if (!remoteFileContext) throw new Error("remote_file_context_unavailable");
+      await sshRemoteTransferEntry(
+        remoteFileContext,
+        clipboard.mode,
+        clipboard.path,
+        targetParentPath,
+        clipboard.name,
+        overwrite,
+      );
+    } else {
+      const command = clipboard.mode === "copy" ? "file_copy" : "file_move";
+      await invoke(command, {
+        rootPath: project.path,
+        sourcePath: clipboard.path,
+        targetParentPath,
+        name: clipboard.name,
+        overwrite,
+      });
+    }
     const refreshPaths = clipboard.mode === "move"
       ? [targetParentPath, parentPath(clipboard.path)]
       : [targetParentPath];
     const uniqueRefreshPaths = Array.from(new Set(refreshPaths)).sort((a, b) => pathDepth(a) - pathDepth(b));
     const refreshedDirs = await Promise.all(uniqueRefreshPaths.map(async (path) => ({
       path,
-      children: await listDir(project.path, path),
+      children: remoteFileContext
+        ? await sshRemoteListDir(remoteFileContext, path)
+        : await listDir(project.path, path),
     })));
     set((state) => ({
       tree: refreshedDirs.reduce(
@@ -1455,6 +1503,89 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       set({ clipboard: null });
     }
     if (get().searchQuery.trim()) await get().setSearchQuery(get().searchQuery);
+  },
+
+  navigateToPath: async (input) => {
+    const project = get().project;
+    if (!project) return false;
+    const relative = parseExplorerPathInput(input, project);
+    if (relative === null) return false;
+    if (!relative) {
+      set({
+        selectedTreePath: "",
+        searchQuery: "",
+        searchResults: [],
+        contentSearchResults: [],
+        searchLoading: false,
+      });
+      return true;
+    }
+    return get().revealPath(relative);
+  },
+
+  duplicateEntry: async (path, name) => {
+    const project = get().project;
+    if (!project) return;
+    const parent = parentPath(path);
+    const remoteFileContext = get().remoteFileContext;
+    for (let attempt = 1; attempt <= 20; attempt += 1) {
+      const nextName = nextDuplicateName(name, attempt);
+      try {
+        if (project.environment_type === "ssh") {
+          if (!remoteFileContext) throw new Error("remote_file_context_unavailable");
+          await sshRemoteTransferEntry(remoteFileContext, "copy", path, parent, nextName, false);
+        } else {
+          await invoke("file_copy", {
+            rootPath: project.path,
+            sourcePath: path,
+            targetParentPath: parent,
+            name: nextName,
+            overwrite: false,
+          });
+        }
+        await get().loadDir(parent);
+        await get().refreshGitChanges();
+        return;
+      } catch (error) {
+        if (!String(error).includes("target_exists") || attempt === 20) throw error;
+      }
+    }
+  },
+
+  downloadEntry: async (path, targetPath) => {
+    const remoteFileContext = get().remoteFileContext;
+    if (!remoteFileContext) throw new Error("remote_file_context_unavailable");
+    const payload = await sshRemoteReadBytes(remoteFileContext, path);
+    await invoke("file_write_user_file", {
+      path: targetPath,
+      dataBase64: payload.dataBase64,
+    });
+  },
+
+  uploadInto: async (parentPathValue, localPath, overwrite) => {
+    const remoteFileContext = get().remoteFileContext;
+    if (!remoteFileContext) throw new Error("remote_file_context_unavailable");
+    const payload = await invoke<{ name: string; dataBase64: string }>("file_read_user_file", {
+      path: localPath,
+    });
+    await sshRemoteWriteBytes(remoteFileContext, parentPathValue, payload.name, payload.dataBase64, overwrite);
+    await get().loadDir(parentPathValue);
+  },
+
+  statEntry: async (path) => {
+    const project = get().project;
+    if (!project) return null;
+    const remoteFileContext = get().remoteFileContext;
+    if (remoteFileContext) {
+      return sshRemoteStat(remoteFileContext, path);
+    }
+    const children = await listDir(project.path, parentPath(path));
+    return children.find((entry) => entry.path === path) ?? {
+      name: basename(path) || project.name,
+      path,
+      kind: path ? "file" : "directory",
+      sizeBytes: 0,
+    };
   },
 }));
 

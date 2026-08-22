@@ -28,6 +28,7 @@ pub mod ssh;
 pub mod ssh_config;
 pub mod ssh_db;
 pub mod ssh_files;
+pub mod ssh_tunnels;
 pub mod ssh_git;
 pub mod ssh_integration;
 pub mod subagent_transcript;

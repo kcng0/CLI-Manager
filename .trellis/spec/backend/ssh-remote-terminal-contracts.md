@@ -4,7 +4,7 @@
 
 Apply this contract when changing SSH host persistence, remote project creation, remote directory queries, terminal launch, PTY/daemon restore, project capability routing, or project sync/import behavior.
 
-SSH projects support remote terminals plus explicit Claude/Codex Agent Hook integration, read-only history, same-source remote resume, Codex remote handoff through cc-connect, and a full remote Git panel routed through the SSH Agent. Local and WSL projects retain their existing capabilities. Remote files, Worktree, historical statistics, provider switching, external terminal launch, and remote resource monitoring remain separate implementations.
+SSH projects support remote terminals plus explicit Claude/Codex Agent Hook integration, read-only history, same-source remote resume, Codex remote handoff through cc-connect, a full remote Git panel routed through the SSH Agent, writable remote files when the Agent advertises `fileManage`, and SSH port forwards persisted per host. Local and WSL projects retain their existing capabilities. Worktree, historical statistics, provider switching, external terminal launch, and remote resource monitoring remain separate implementations.
 
 ## 2. Signatures
 
@@ -24,6 +24,11 @@ projects.environment_type TEXT NOT NULL DEFAULT 'local'
 projects.ssh_host_id TEXT REFERENCES ssh_hosts(id) ON DELETE SET NULL
 projects.remote_path TEXT NOT NULL DEFAULT ''
 projects.cli_config_root TEXT NOT NULL DEFAULT ''
+
+ssh_port_forwards(id, host_id, name, mode, listen_address, listen_port,
+                  target_host, target_port, auto_start, sort_order,
+                  created_at, updated_at)
+  FOREIGN KEY(host_id) REFERENCES ssh_hosts(id) ON DELETE CASCADE
 
 ssh_host_tool_preferences(host_id, source, configured_root, updated_at)
 ssh_agent_tool_integrations(integration_id, host_id nullable, installation_id,
@@ -46,6 +51,16 @@ pub async fn ssh_check_path(spec: SshConnectionSpec, path: String)
     -> Result<SshPathCheckResult, String>;
 pub async fn ssh_list_directories(spec: SshConnectionSpec, path: String)
     -> Result<Vec<SshDirectoryEntry>, String>;
+pub async fn ssh_home_directory(spec: SshConnectionSpec) -> Result<String, String>;
+pub async fn ssh_create_directory(spec: SshConnectionSpec, path: String)
+    -> Result<(), String>;
+pub async fn ssh_delete_directory(spec: SshConnectionSpec, path: String)
+    -> Result<(), String>;
+pub async fn ssh_tunnel_start(forward_id: String, spec: SshTransportSpec, forward: SshForwardSpec)
+    -> Result<SshTunnelStatus, String>;
+pub async fn ssh_tunnel_stop(forward_id: String) -> Result<SshTunnelStatus, String>;
+pub async fn ssh_tunnel_status(forward_id: String) -> Result<SshTunnelStatus, String>;
+pub async fn ssh_tunnel_list(forward_ids: Vec<String>) -> Result<Vec<SshTunnelStatus>, String>;
 pub async fn ssh_agent_hook_inspect(...) -> Result<HookConfigReport, String>;
 pub async fn ssh_agent_hook_preview(...) -> Result<HookConfigReport, String>;
 pub async fn ssh_agent_hook_apply(...) -> Result<HookConfigReport, String>;
@@ -191,7 +206,8 @@ Only the exact value `1` enables control-terminal input. One-shot probes, direct
 ### Capability routing
 
 - All SSH feature entry points must consult `resolveProjectCapabilities` or an equivalent hard backend/store guard.
-- SSH project capabilities allow `terminal`, `splitTerminal`, `commandTemplates`, read-only remote `files`, full remote `git` when the Agent advertises `gitFull`, remote `history`, and remote `statistics`; remote Hook state is routed by the dedicated Agent/binding contract rather than by local history/provider capability fallbacks.
+- SSH project capabilities allow `terminal`, `splitTerminal`, `commandTemplates`, remote `files` (writable when the Agent advertises `fileManage`, otherwise read-only with an upgrade prompt), full remote `git` when the Agent advertises `gitFull`, remote `history`, and remote `statistics`; remote Hook state is routed by the dedicated Agent/binding contract rather than by local history/provider capability fallbacks.
+- SSH port forwards persist in `ssh_port_forwards` and launch a detached OpenSSH `-N -T` process with `ExitOnForwardFailure=yes`. `password_prompt` and `interactive` auth must return `ssh_interactive_auth_required` and must not start a tunnel. Auto-start forwards are launched after first-screen deferred startup.
 - Switching to an SSH session must not close a supported terminal side panel. Files, Git, history/replay, and statistics remain open after their asynchronous remote load completes in both merged and independent panel layouts.
 - Terminal Git panel identity comes from the registered `Project`: SSH uses trimmed `project.remote_path`, while local/WSL may use the session/Worktree path. An SSH session's empty desktop `cwd`/`project.path` must never produce the Git `no project` state.
 - File panel context identity is environment-specific: local/WSL compare project id plus normalized local/Worktree path; SSH compares project id, Host id, and case-sensitive normalized `remote_path`. Host/root changes must rebuild the remote context, and stale async results must not overwrite the replacement context.

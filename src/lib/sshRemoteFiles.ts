@@ -174,6 +174,136 @@ export async function sshRemoteSearch(
   return (response.entries ?? []).map(toEntry);
 }
 
+export async function sshRemoteCreateEntry(
+  context: SshRemoteFileContext,
+  parentPath: string,
+  name: string,
+  kind: "file" | "directory",
+  overwrite: boolean,
+): Promise<void> {
+  await runFileOperation(context, "backgroundOperations.remoteFiles.writing", () =>
+    invoke("ssh_remote_file_create", {
+      consumerId: context.consumerId,
+      sshLaunch: context.launch,
+      rootPath: context.rootPath,
+      parentPath,
+      name,
+      kind,
+      overwrite,
+    }));
+}
+
+export async function sshRemoteRenameEntry(
+  context: SshRemoteFileContext,
+  relativePath: string,
+  newName: string,
+  overwrite: boolean,
+): Promise<void> {
+  await runFileOperation(context, "backgroundOperations.remoteFiles.writing", () =>
+    invoke("ssh_remote_file_rename", {
+      consumerId: context.consumerId,
+      sshLaunch: context.launch,
+      rootPath: context.rootPath,
+      relativePath,
+      newName,
+      overwrite,
+    }));
+}
+
+export async function sshRemoteDeleteEntry(
+  context: SshRemoteFileContext,
+  relativePath: string,
+): Promise<void> {
+  await runFileOperation(context, "backgroundOperations.remoteFiles.writing", () =>
+    invoke("ssh_remote_file_delete", {
+      consumerId: context.consumerId,
+      sshLaunch: context.launch,
+      rootPath: context.rootPath,
+      relativePath,
+    }));
+}
+
+export async function sshRemoteTransferEntry(
+  context: SshRemoteFileContext,
+  mode: "copy" | "move",
+  sourcePath: string,
+  targetParentPath: string,
+  name: string,
+  overwrite: boolean,
+): Promise<void> {
+  await runFileOperation(context, "backgroundOperations.remoteFiles.writing", () =>
+    invoke(mode === "copy" ? "ssh_remote_file_copy" : "ssh_remote_file_move", {
+      consumerId: context.consumerId,
+      sshLaunch: context.launch,
+      rootPath: context.rootPath,
+      sourcePath,
+      targetParentPath,
+      name,
+      overwrite,
+    }));
+}
+
+export async function sshRemoteWriteText(
+  context: SshRemoteFileContext,
+  relativePath: string,
+  content: string,
+): Promise<void> {
+  await runFileOperation(context, "backgroundOperations.remoteFiles.writing", () =>
+    invoke("ssh_remote_file_write", {
+      consumerId: context.consumerId,
+      sshLaunch: context.launch,
+      rootPath: context.rootPath,
+      relativePath,
+      content,
+    }));
+}
+
+export async function sshRemoteStat(
+  context: SshRemoteFileContext,
+  relativePath: string,
+): Promise<ProjectFileEntry> {
+  const entry = await runFileOperation(context, "backgroundOperations.remoteFiles.listing", () =>
+    invoke<RemoteFileEntry>("ssh_remote_file_stat", {
+      consumerId: context.consumerId,
+      sshLaunch: context.launch,
+      rootPath: context.rootPath,
+      relativePath,
+    }));
+  return toEntry(entry);
+}
+
+export async function sshRemoteReadBytes(
+  context: SshRemoteFileContext,
+  relativePath: string,
+): Promise<{ name: string; sizeBytes: number; dataBase64: string }> {
+  return runFileOperation(context, "backgroundOperations.remoteFiles.reading", () =>
+    invoke("ssh_remote_file_read_bytes", {
+      consumerId: context.consumerId,
+      sshLaunch: context.launch,
+      rootPath: context.rootPath,
+      relativePath,
+    }));
+}
+
+export async function sshRemoteWriteBytes(
+  context: SshRemoteFileContext,
+  parentPath: string,
+  name: string,
+  dataBase64: string,
+  overwrite: boolean,
+): Promise<void> {
+  await runFileOperation(context, "backgroundOperations.remoteFiles.writing", () =>
+    invoke("ssh_remote_file_write_bytes", {
+      consumerId: context.consumerId,
+      sshLaunch: context.launch,
+      rootPath: context.rootPath,
+      parentPath,
+      name,
+      dataBase64,
+      overwrite,
+    }));
+}
+
 export function remoteEntryToSearchMatch(entry: ProjectFileEntry): ProjectFileContentMatch {
   return {
     path: entry.path,

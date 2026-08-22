@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ArrowUp, ChevronRight, Copy, Download, FolderOpen, RefreshCw, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
+import { Copy, Download, FolderOpen, RefreshCw, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
+import { SshDirectoryPickerPanel } from "../../ssh/SshDirectoryPickerPanel";
 import { buildSshConnectionSpec } from "../../../lib/ssh";
 import {
   DEFAULT_SSH_TOOL_CONFIG_ROOT,
@@ -173,6 +174,9 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
     loading: pickerLoading,
     error: pickerError,
     load: loadPickerDirectories,
+    createDirectory: createPickerDirectory,
+    deleteDirectory: deletePickerDirectory,
+    goHome: goPickerHome,
     close: closePickerDirectories,
   } = useSshDirectoryBrowser(host, hosts);
   const [probing, setProbing] = useState(false);
@@ -1028,27 +1032,20 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
             <DialogTitle>{t("settings.sshHosts.cliIntegration.pickerTitle")}</DialogTitle>
             <DialogDescription className="sr-only">{t("settings.sshHosts.cliIntegration.pickerDescription")}</DialogDescription>
           </div>
-          <div className="space-y-3 p-4">
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" onClick={() => {
-                const parent = pickerPath.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/";
-                if (pickerSource) void loadDirectories(pickerSource, parent);
-              }} title={t("common.parentDirectory")} aria-label={t("common.parentDirectory")}>
-                <ArrowUp className="h-4 w-4" />
-              </Button>
-              <Input value={pickerPath} onChange={(event) => setPickerPath(event.target.value)} className="flex-1 font-mono text-sm" />
-              <Button type="button" variant="outline" onClick={() => { if (pickerSource) void loadPickerDirectories(pickerPath, { force: true }); }}>{t("common.refresh")}</Button>
-            </div>
-            <div className="max-h-72 min-h-48 overflow-y-auto rounded-md border border-border p-1">
-              {pickerLoading && <div className="p-4 text-sm text-text-muted">{t("common.loading")}</div>}
-              {!pickerLoading && pickerError && <div className="p-4 text-sm text-danger">{pickerError}</div>}
-              {!pickerLoading && !pickerError && directories.map((entry) => (
-                <button key={entry.path} type="button" onClick={() => setPickerPath(entry.path)} onDoubleClick={() => { if (pickerSource) void loadDirectories(pickerSource, entry.path); }} className="flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm hover:bg-surface-container-highest">
-                  <span className="truncate">{entry.name}</span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />
-                </button>
-              ))}
-            </div>
+          <div className="p-4">
+            <SshDirectoryPickerPanel
+              path={pickerPath}
+              entries={directories}
+              loading={pickerLoading}
+              error={pickerError}
+              onPathChange={setPickerPath}
+              onLoad={(nextPath, options) => { if (pickerSource) void loadPickerDirectories(nextPath, options); }}
+              onHome={goPickerHome}
+              onCreate={createPickerDirectory}
+              onDelete={deletePickerDirectory}
+              pathLabel={t("settings.sshHosts.cliIntegration.pickerTitle")}
+              emptyLabel={t("configModal.ssh.pickerEmpty")}
+            />
           </div>
           <DialogFooter className="border-t border-border px-4 py-3">
             <Button type="button" variant="outline" onClick={closeDirectoryPicker}>{t("common.cancel")}</Button>

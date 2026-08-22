@@ -24,6 +24,7 @@ import type {
 } from "../../../lib/types";
 import { buildSshConnectionSpec } from "../../../lib/ssh";
 import { useSshHostStore } from "../../../stores/sshHostStore";
+import { useSshTunnelStore } from "../../../stores/sshTunnelStore";
 import { useTerminalStore } from "../../../stores/terminalStore";
 import { useSshAgentIntegrationStore } from "../../../stores/sshAgentIntegrationStore";
 import { useAppConfirm } from "../../ui/useAppConfirm";
@@ -60,6 +61,9 @@ const ERROR_LABELS: Record<string, TranslationKey> = {
   ssh_jump_host_required: "settings.sshHosts.error.jumpRequired",
   ssh_proxy_command_required: "settings.sshHosts.error.proxyCommandRequired",
   ssh_password_required: "settings.sshHosts.error.passwordRequired",
+  ssh_forward_port_invalid: "settings.sshHosts.error.forwardPortInvalid",
+  ssh_forward_host_invalid: "settings.sshHosts.error.forwardHostInvalid",
+  ssh_interactive_auth_required: "settings.sshHosts.error.interactiveTunnel",
   ssh_credential_ref_required: "settings.sshHosts.error.credentialRefRequired",
   ssh_group_name_required: "settings.sshHosts.error.groupNameRequired",
   ssh_group_name_duplicate: "settings.sshHosts.error.groupNameDuplicate",
@@ -101,6 +105,7 @@ export function SshHostsSettingsPage({ searchValue, onTerminalOpened }: Props) {
   const loaded = useSshHostStore((state) => state.loaded);
   const loadError = useSshHostStore((state) => state.loadError);
   const fetchHosts = useSshHostStore((state) => state.fetchHosts);
+  const fetchForwards = useSshTunnelStore((state) => state.fetchForwards);
   const createHost = useSshHostStore((state) => state.createHost);
   const updateHost = useSshHostStore((state) => state.updateHost);
   const deleteHost = useSshHostStore((state) => state.deleteHost);
@@ -131,10 +136,11 @@ export function SshHostsSettingsPage({ searchValue, onTerminalOpened }: Props) {
 
   useEffect(() => {
     void fetchHosts();
+    void fetchForwards();
     void invoke<SshClientStatus>("ssh_client_status").then(setClient).catch(() => {
       setClient({ available: false, version: null, error: "ssh_client_unavailable" });
     });
-  }, [fetchHosts]);
+  }, [fetchForwards, fetchHosts]);
 
   const filteredHosts = useMemo(() => {
     const query = searchValue.trim().toLocaleLowerCase();
@@ -292,8 +298,14 @@ export function SshHostsSettingsPage({ searchValue, onTerminalOpened }: Props) {
     }
     if (!await confirm({ title: t("settings.sshHosts.deleteTitle"), message: t("settings.sshHosts.deleteDescription", { name: host.name }), danger: true })) return;
     try {
+      const tunnelStore = useSshTunnelStore.getState();
+      if (!tunnelStore.loaded) await tunnelStore.fetchForwards();
+      for (const forward of tunnelStore.forwards.filter((item) => item.host_id === host.id)) {
+        await tunnelStore.stopForward(forward.id).catch(() => undefined);
+      }
       await deleteHost(host.id);
       if (host.credential_ref) await invoke("ssh_delete_password", { hostId: host.id });
+      await tunnelStore.fetchForwards();
     } catch (nextError) { setError(nextError instanceof Error ? nextError.message : String(nextError)); }
   };
 

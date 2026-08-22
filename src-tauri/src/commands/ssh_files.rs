@@ -397,6 +397,216 @@ pub async fn ssh_remote_file_search(
     .await
 }
 
+#[tauri::command]
+pub async fn ssh_remote_file_create(
+    daemon_bridge: tauri::State<'_, DaemonBridge>,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    parent_path: String,
+    name: String,
+    kind: String,
+    overwrite: bool,
+) -> Result<Value, String> {
+    request(
+        daemon_bridge,
+        consumer_id,
+        ssh_launch,
+        "fileCreate",
+        json!({
+            "rootPath": root_path,
+            "parentPath": parent_path,
+            "name": name,
+            "kind": kind,
+            "overwrite": overwrite
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ssh_remote_file_rename(
+    daemon_bridge: tauri::State<'_, DaemonBridge>,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    relative_path: String,
+    new_name: String,
+    overwrite: bool,
+) -> Result<Value, String> {
+    request(
+        daemon_bridge,
+        consumer_id,
+        ssh_launch,
+        "fileRename",
+        json!({
+            "rootPath": root_path,
+            "relativePath": relative_path,
+            "newName": new_name,
+            "overwrite": overwrite
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ssh_remote_file_delete(
+    daemon_bridge: tauri::State<'_, DaemonBridge>,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    relative_path: String,
+) -> Result<Value, String> {
+    request(
+        daemon_bridge,
+        consumer_id,
+        ssh_launch,
+        "fileDelete",
+        json!({ "rootPath": root_path, "relativePath": relative_path }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ssh_remote_file_copy(
+    daemon_bridge: tauri::State<'_, DaemonBridge>,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    source_path: String,
+    target_parent_path: String,
+    name: String,
+    overwrite: bool,
+) -> Result<Value, String> {
+    request(
+        daemon_bridge,
+        consumer_id,
+        ssh_launch,
+        "fileCopy",
+        json!({
+            "rootPath": root_path,
+            "sourcePath": source_path,
+            "targetParentPath": target_parent_path,
+            "name": name,
+            "overwrite": overwrite
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ssh_remote_file_move(
+    daemon_bridge: tauri::State<'_, DaemonBridge>,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    source_path: String,
+    target_parent_path: String,
+    name: String,
+    overwrite: bool,
+) -> Result<Value, String> {
+    request(
+        daemon_bridge,
+        consumer_id,
+        ssh_launch,
+        "fileMove",
+        json!({
+            "rootPath": root_path,
+            "sourcePath": source_path,
+            "targetParentPath": target_parent_path,
+            "name": name,
+            "overwrite": overwrite
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ssh_remote_file_write(
+    daemon_bridge: tauri::State<'_, DaemonBridge>,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    relative_path: String,
+    content: String,
+) -> Result<Value, String> {
+    request(
+        daemon_bridge,
+        consumer_id,
+        ssh_launch,
+        "fileWrite",
+        json!({
+            "rootPath": root_path,
+            "relativePath": relative_path,
+            "content": content
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ssh_remote_file_stat(
+    daemon_bridge: tauri::State<'_, DaemonBridge>,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    relative_path: String,
+) -> Result<Value, String> {
+    request(
+        daemon_bridge,
+        consumer_id,
+        ssh_launch,
+        "fileStat",
+        json!({ "rootPath": root_path, "relativePath": relative_path }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ssh_remote_file_read_bytes(
+    daemon_bridge: tauri::State<'_, DaemonBridge>,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    relative_path: String,
+) -> Result<Value, String> {
+    request(
+        daemon_bridge,
+        consumer_id,
+        ssh_launch,
+        "fileReadBytes",
+        json!({ "rootPath": root_path, "relativePath": relative_path }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ssh_remote_file_write_bytes(
+    daemon_bridge: tauri::State<'_, DaemonBridge>,
+    consumer_id: String,
+    ssh_launch: SshLaunchPlan,
+    root_path: String,
+    parent_path: String,
+    name: String,
+    data_base64: String,
+    overwrite: bool,
+) -> Result<Value, String> {
+    request(
+        daemon_bridge,
+        consumer_id,
+        ssh_launch,
+        "fileWriteBytes",
+        json!({
+            "rootPath": root_path,
+            "parentPath": parent_path,
+            "name": name,
+            "dataBase64": data_base64,
+            "overwrite": overwrite
+        }),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

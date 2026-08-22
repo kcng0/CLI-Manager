@@ -101,6 +101,30 @@ export interface CreateSshHostInput {
 
 export type UpdateSshHostInput = Partial<CreateSshHostInput> & { sort_order?: number };
 
+export type SshPortForwardMode = "local" | "remote" | "dynamic";
+
+export interface SshPortForward {
+  id: string;
+  host_id: string;
+  name: string;
+  mode: SshPortForwardMode;
+  listen_address: string;
+  listen_port: number;
+  target_host: string;
+  target_port: number;
+  auto_start: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SshTunnelStatus {
+  forwardId: string;
+  state: "running" | "stopped" | "error" | string;
+  error?: string | null;
+  startedAtMs?: number | null;
+}
+
 export interface SshAgentInstallation {
   host_id: string;
   installation_id: string;

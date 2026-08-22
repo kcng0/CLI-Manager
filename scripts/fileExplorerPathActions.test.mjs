@@ -18,6 +18,19 @@ test("file menus expose relative and absolute path copy actions", () => {
   assert.equal((sidebar.match(/<PathCopyMenu /g) ?? []).length, 4);
 });
 
+test("file explorer exposes a path bar and extra file actions", () => {
+  assert.match(sidebar, /<FileExplorerPathBar/);
+  assert.match(sidebar, /files\.toolbar\.root/);
+  assert.match(sidebar, /files\.path\.input/);
+  assert.match(sidebar, /files\.menu\.cut/);
+  assert.match(sidebar, /files\.menu\.duplicate/);
+  assert.match(sidebar, /files\.menu\.copyName/);
+  assert.match(sidebar, /files\.menu\.openInTerminal/);
+  assert.match(sidebar, /files\.menu\.properties/);
+  assert.match(sidebar, /files\.menu\.download/);
+  assert.match(sidebar, /files\.menu\.upload/);
+});
+
 test("absolute file paths use the local root or SSH remote root", () => {
   assert.match(formatter, /project\.environment_type === "ssh" \? project\.remote_path : project\.path/);
   assert.ok(formatter.includes("normalizedPath.replace(/\\//g, separator)"));

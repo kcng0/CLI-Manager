@@ -31,7 +31,8 @@ import { Button } from "./ui/button";
 import { toast } from "sonner";
 import { logError, logInfo, logWarn } from "../lib/logger";
 import { pickByLanguage, useI18n, type TranslationKey } from "../lib/i18n";
-import { ArrowUp, ChevronRight, FolderOpen } from "lucide-react";
+import { FolderOpen } from "lucide-react";
+import { SshDirectoryPickerPanel } from "./ssh/SshDirectoryPickerPanel";
 import {
   getCliArgsHistorySuggestions,
   type CliArgsHistoryEntry,
@@ -324,6 +325,9 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
     loading: remotePickerLoading,
     error: remotePickerError,
     load: loadRemoteDirectories,
+    createDirectory: createRemoteDirectory,
+    deleteDirectory: deleteRemoteDirectory,
+    goHome: goRemoteHome,
     close: closeRemoteDirectoryBrowser,
   } = useSshDirectoryBrowser(selectedSshHost, sshHosts, {
     describeError: describeRemotePathError,
@@ -961,51 +965,20 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
             <DialogTitle>{t(remotePickerTarget === "projectPath" ? "configModal.ssh.pickerTitle" : "configModal.ssh.configRootPickerTitle")}</DialogTitle>
             <DialogDescription className="sr-only">{t(remotePickerTarget === "projectPath" ? "configModal.ssh.pickerDescription" : "configModal.ssh.configRootPickerDescription")}</DialogDescription>
           </div>
-          <div className="space-y-3 p-4">
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  const parent = remotePickerPath.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/";
-                  void loadRemoteDirectories(parent);
-                }}
-                title={t("common.parentDirectory")}
-                aria-label={t("common.parentDirectory")}
-              >
-                <ArrowUp className="h-4 w-4" />
-              </Button>
-              <Input
-                value={remotePickerPath}
-                aria-label={t(remotePickerTarget === "projectPath" ? "configModal.ssh.remotePath" : "configModal.ssh.cliConfigRoot")}
-                placeholder="/"
-                onChange={(event) => setRemotePickerPath(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void loadRemoteDirectories(remotePickerPath);
-                }}
-                className="flex-1 font-mono text-sm"
-              />
-              <Button type="button" variant="outline" onClick={() => void loadRemoteDirectories(remotePickerPath, { force: true })}>
-                {t("common.refresh")}
-              </Button>
-            </div>
-            <div className="max-h-80 min-h-52 overflow-y-auto rounded-xl border border-border bg-bg-secondary/60 p-1">
-              {remotePickerLoading && <div className="p-4 text-sm text-text-muted">{t("common.loading")}</div>}
-              {!remotePickerLoading && remotePickerError && <div className="p-4 text-sm text-danger">{remotePickerError}</div>}
-              {!remotePickerLoading && !remotePickerError && remoteDirectories.length === 0 && <div className="p-4 text-sm text-text-muted">{t("configModal.ssh.pickerEmpty")}</div>}
-              {!remotePickerLoading && !remotePickerError && remoteDirectories.map((entry) => (
-                <button
-                  key={entry.path}
-                  type="button"
-                  onDoubleClick={() => void loadRemoteDirectories(entry.path)}
-                  onClick={() => setRemotePickerPath(entry.path)}
-                  className="ui-focus-ring flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-text-primary transition-colors hover:bg-surface-container-highest"
-                >
-                  <span className="truncate">{entry.name}</span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />
-                </button>
-              ))}
-            </div>
+          <div className="p-4">
+            <SshDirectoryPickerPanel
+              path={remotePickerPath}
+              entries={remoteDirectories}
+              loading={remotePickerLoading}
+              error={remotePickerError}
+              onPathChange={setRemotePickerPath}
+              onLoad={loadRemoteDirectories}
+              onHome={goRemoteHome}
+              onCreate={createRemoteDirectory}
+              onDelete={deleteRemoteDirectory}
+              pathLabel={t(remotePickerTarget === "projectPath" ? "configModal.ssh.remotePath" : "configModal.ssh.cliConfigRoot")}
+              emptyLabel={t("configModal.ssh.pickerEmpty")}
+            />
           </div>
           <DialogFooter className="border-t border-border px-4 py-3">
             <Button type="button" variant="outline" onClick={closeRemotePicker}>{t("common.cancel")}</Button>

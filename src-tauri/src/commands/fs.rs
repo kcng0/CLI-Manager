@@ -761,6 +761,109 @@ pub async fn file_move(
     .map_err(|err| err.to_string())?
 }
 
+const USER_FILE_TRANSFER_MAX_BYTES: usize = 20 * 1024 * 1024;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserFileBytes {
+    pub name: String,
+    pub size_bytes: u64,
+    pub data_base64: String,
+}
+
+#[tauri::command]
+pub async fn file_read_user_file(path: String) -> Result<UserFileBytes, String> {
+    tokio::task::spawn_blocking(move || read_user_file(&path))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn file_write_user_file(path: String, data_base64: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || write_user_file(&path, &data_base64))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn validate_user_file_path(path: &str) -> Result<PathBuf, String> {
+    if path.is_empty() || path.contains(['\0', '\r', '\n']) || !Path::new(path).is_absolute() {
+        return Err("export_path_invalid".into());
+    }
+    let target = PathBuf::from(path);
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if name.is_empty() || matches!(name, "." | "..") {
+        return Err("export_path_invalid".into());
+    }
+    Ok(target)
+}
+
+fn read_user_file(path: &str) -> Result<UserFileBytes, String> {
+    let target = validate_user_file_path(path)?;
+    let metadata = fs::symlink_metadata(&target).map_err(|_| "export_file_unavailable".to_string())?;
+    if is_symlink_or_reparse(&metadata) || !metadata.is_file() {
+        return Err("export_path_invalid".into());
+    }
+    if metadata.len() == 0 || metadata.len() > USER_FILE_TRANSFER_MAX_BYTES as u64 {
+        return Err(if metadata.len() == 0 {
+            "export_empty".into()
+        } else {
+            "export_too_large".into()
+        });
+    }
+    let canonical = target
+        .canonicalize()
+        .map_err(|_| "export_file_unavailable".to_string())?;
+    let name = canonical
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "export_path_invalid".to_string())?
+        .to_string();
+    let data = fs::read(&canonical).map_err(|_| "export_file_unavailable".to_string())?;
+    Ok(UserFileBytes {
+        name,
+        size_bytes: data.len() as u64,
+        data_base64: general_purpose::STANDARD.encode(data),
+    })
+}
+
+fn write_user_file(path: &str, data_base64: &str) -> Result<(), String> {
+    let target = validate_user_file_path(path)?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| "export_path_invalid".to_string())?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|err| format!("export_parent_unavailable: {err}"))?;
+    if !canonical_parent.is_dir() {
+        return Err("export_parent_not_directory".into());
+    }
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "export_path_invalid".to_string())?;
+    let dest = canonical_parent.join(name);
+    if dest.exists() {
+        let metadata = fs::symlink_metadata(&dest).map_err(|err| format!("metadata_failed: {err}"))?;
+        if is_symlink_or_reparse(&metadata) {
+            return Err("path_is_symlink".into());
+        }
+    }
+    let data = general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|_| "export_data_invalid".to_string())?;
+    if data.is_empty() || data.len() > USER_FILE_TRANSFER_MAX_BYTES {
+        return Err(if data.is_empty() {
+            "export_empty".into()
+        } else {
+            "export_too_large".into()
+        });
+    }
+    fs::write(&dest, data).map_err(|err| format!("export_write_failed: {err}"))
+}
+
 pub(crate) fn validate_relative_path(path: &str) -> Result<(), &'static str> {
     if path.is_empty() {
         return Ok(());

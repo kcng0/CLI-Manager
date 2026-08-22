@@ -54,6 +54,50 @@ export function normalizeSshDirectoryPath(value: string): string {
   return trimmed === "/" ? "/" : trimmed.replace(/\/+$/, "") || "/";
 }
 
+export function parentSshDirectoryPath(value: string): string {
+  const normalized = normalizeSshDirectoryPath(value);
+  if (normalized === "/") return "/";
+  const index = normalized.lastIndexOf("/");
+  return index <= 0 ? "/" : normalized.slice(0, index);
+}
+
+export function joinSshDirectoryPath(parent: string, name: string): string {
+  const cleanName = name.trim();
+  if (!cleanName || cleanName.includes("/") || cleanName.includes("\\") || cleanName === "." || cleanName === "..") {
+    throw new Error("ssh_remote_path_invalid");
+  }
+  const base = normalizeSshDirectoryPath(parent);
+  return base === "/" ? `/${cleanName}` : `${base}/${cleanName}`;
+}
+
+export async function createSshDirectory(
+  session: SshDirectoryBrowserSession,
+  path: string,
+): Promise<void> {
+  await invoke("ssh_create_directory", {
+    spec: session.spec,
+    path: normalizeSshDirectoryPath(path),
+  });
+  session.cache.clear();
+}
+
+export async function deleteSshDirectory(
+  session: SshDirectoryBrowserSession,
+  path: string,
+): Promise<void> {
+  await invoke("ssh_delete_directory", {
+    spec: session.spec,
+    path: normalizeSshDirectoryPath(path),
+  });
+  session.cache.clear();
+}
+
+export async function resolveSshHomeDirectory(
+  session: SshDirectoryBrowserSession,
+): Promise<string> {
+  return invoke<string>("ssh_home_directory", { spec: session.spec });
+}
+
 export function sshDirectoryBrowserConnectionKey(
   host: SshHost | null,
   hosts: SshHost[],

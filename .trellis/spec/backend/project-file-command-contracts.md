@@ -33,6 +33,8 @@ file_rename(root_path: String, relative_path: String, new_name: String, overwrit
 file_delete(root_path: String, relative_path: String) -> Result<(), String>
 file_copy(root_path: String, source_path: String, target_parent_path: String, name: String, overwrite: bool) -> Result<(), String>
 file_move(root_path: String, source_path: String, target_parent_path: String, name: String, overwrite: bool) -> Result<(), String>
+file_read_user_file(path: String) -> Result<UserFileBytes, String>
+file_write_user_file(path: String, data_base64: String) -> Result<(), String>
 ```
 
 Payloads:
@@ -44,6 +46,7 @@ TextFilePayload { content: String, size_bytes: u64 }
 ProjectTextFilePayload { content: String, size_bytes: u64, encoding: String, has_bom: bool, guessed: bool }
 ImageFilePayload { data_base64: String, mime_type: String, size_bytes: u64 }
 ProjectFilesChangedPayload { project_path: String, changed_paths: Vec<String> }
+UserFileBytes { name: String, size_bytes: u64, data_base64: String }
 ```
 
 ### 3. Contracts
@@ -68,6 +71,7 @@ ProjectFilesChangedPayload { project_path: String, changed_paths: Vec<String> }
 - `file_search_content` scans supported user-project text encodings within the project root, skips large/binary/undecodable files and common binary extensions, and returns at most one representative match per file with 1-based line numbers and bounded context snippets.
 - `overwrite=false` must return `target_exists` when the destination exists.
 - `overwrite=true` may replace the target after Rust revalidates the destination stays inside root.
+- `file_read_user_file` / `file_write_user_file` accept an absolute user-chosen path for SSH upload/download. They reject symlinks, empty files, and files larger than 20 MiB, and must not be used as a project-root relative file API.
 
 ### 4. Validation & Error Matrix
 

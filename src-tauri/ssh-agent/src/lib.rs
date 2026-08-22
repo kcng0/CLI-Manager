@@ -1,4 +1,5 @@
 pub mod agent_capabilities;
+pub mod file_manage;
 pub mod files;
 pub mod git;
 mod git_diff;
@@ -13,7 +14,7 @@ use serde::Serialize;
 
 pub const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PROTOCOL_MAJOR: u16 = 1;
-pub const PROTOCOL_MINOR: u16 = 11;
+pub const PROTOCOL_MINOR: u16 = 12;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,7 +51,7 @@ mod tests {
         let report = version_report();
         assert_eq!(report.agent_name, "cli-manager-ssh-agent");
         assert_eq!(report.protocol_major, 1);
-        assert_eq!(report.protocol_minor, 11);
+        assert_eq!(report.protocol_minor, 12);
     }
 
     #[test]

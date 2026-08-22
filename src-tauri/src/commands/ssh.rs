@@ -1984,6 +1984,79 @@ pub async fn ssh_list_directories(
     Ok(entries)
 }
 
+#[tauri::command]
+pub async fn ssh_home_directory(spec: SshConnectionSpec) -> Result<String, String> {
+    validate_spec(&spec)?;
+    ensure_non_interactive(&spec)?;
+    let timeout = Duration::from_secs(spec.connect_timeout_sec.saturating_add(10).min(310));
+    let command = ssh_remote_command(&spec, "printf '%s\\n' \"${HOME:-}\"")?;
+    let output =
+        tauri::async_runtime::spawn_blocking(move || output_with_timeout(command, timeout))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(single_line(&output.stderr));
+    }
+    let home = String::from_utf8(output.stdout)
+        .map_err(|_| "home_directory_unavailable".to_string())?;
+    let home = home.trim();
+    if home.is_empty() {
+        return Err("home_directory_unavailable".to_string());
+    }
+    validate_remote_path(home).map(str::to_string)
+}
+
+#[tauri::command]
+pub async fn ssh_create_directory(
+    spec: SshConnectionSpec,
+    path: String,
+) -> Result<(), String> {
+    validate_spec(&spec)?;
+    ensure_non_interactive(&spec)?;
+    let path = validate_remote_path(&path)?.to_string();
+    if path == "/" {
+        return Err("ssh_remote_path_invalid".to_string());
+    }
+    let script = format!("mkdir -- {}", posix_quote(&path));
+    let timeout = Duration::from_secs(spec.connect_timeout_sec.saturating_add(10).min(310));
+    let command = ssh_remote_command(&spec, &script)?;
+    let output =
+        tauri::async_runtime::spawn_blocking(move || output_with_timeout(command, timeout))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(single_line(&output.stderr));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ssh_delete_directory(
+    spec: SshConnectionSpec,
+    path: String,
+) -> Result<(), String> {
+    validate_spec(&spec)?;
+    ensure_non_interactive(&spec)?;
+    let path = validate_remote_path(&path)?.to_string();
+    if path == "/" {
+        return Err("cannot_delete_root".to_string());
+    }
+    let script = format!("rmdir -- {}", posix_quote(&path));
+    let timeout = Duration::from_secs(spec.connect_timeout_sec.saturating_add(10).min(310));
+    let command = ssh_remote_command(&spec, &script)?;
+    let output =
+        tauri::async_runtime::spawn_blocking(move || output_with_timeout(command, timeout))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(single_line(&output.stderr));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
