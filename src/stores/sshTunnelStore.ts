@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { getDb } from "../lib/db";
 import { buildSshConnectionSpec } from "../lib/ssh";
-import type { SshHost, SshPortForward, SshPortForwardMode, SshTunnelStatus } from "../lib/types";
+import type { SshPortForward, SshPortForwardMode, SshTunnelStatus } from "../lib/types";
 import { useSshHostStore } from "./sshHostStore";
 
 export interface SshForwardDraft {

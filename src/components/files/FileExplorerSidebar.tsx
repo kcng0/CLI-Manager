@@ -197,7 +197,7 @@ async function openExplorerPathInTerminal(project: Project, relativePath: string
   }
   const command = buildExplorerCdCommand(project, relativePath, session.shell);
   try {
-    await terminalProcessManager.write(session.id, formatStartupInputForPty(command, session.shell));
+    await terminalProcessManager.write(session.id, formatStartupInputForPty(command));
     toast.success(t("files.toast.terminalCd"));
   } catch (error) {
     toast.error(t("files.toast.terminalCdFailed"), { description: describeExplorerError(error, t) });
@@ -948,10 +948,6 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const pasteInto = useFileExplorerStore((s) => s.pasteInto);
   const setClipboard = useFileExplorerStore((s) => s.setClipboard);
   const navigateToPath = useFileExplorerStore((s) => s.navigateToPath);
-  const duplicateEntry = useFileExplorerStore((s) => s.duplicateEntry);
-  const downloadEntry = useFileExplorerStore((s) => s.downloadEntry);
-  const uploadInto = useFileExplorerStore((s) => s.uploadInto);
-  const statEntry = useFileExplorerStore((s) => s.statEntry);
   const fileExplorerIgnoredPaths = useSettingsStore((s) => s.fileExplorerIgnoredPaths);
   const updateSetting = useSettingsStore((s) => s.update);
   const [inputAction, setInputAction] = useState<InputAction | null>(null);
