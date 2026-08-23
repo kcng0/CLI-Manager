@@ -47,7 +47,10 @@ function draftFromForward(forward: SshPortForward): SshForwardDraft {
 
 export function SshHostTunnelSection({ hostId }: { hostId: string | null }) {
   const { t } = useI18n();
-  const forwards = useSshTunnelStore((state) => hostForwards(state.forwards, hostId ?? ""));
+  // Zustand 5 的 useSyncExternalStore 要求 selector 返回稳定引用。
+  // 不能在 selector 里 filter 出新数组，否则打开主机编辑器会把 React 打进无限更新。
+  const allForwards = useSshTunnelStore((state) => state.forwards);
+  const forwards = hostForwards(allForwards, hostId ?? "");
   const statuses = useSshTunnelStore((state) => state.statuses);
   const fetchForwards = useSshTunnelStore((state) => state.fetchForwards);
   const saveForward = useSshTunnelStore((state) => state.saveForward);
